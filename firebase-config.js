@@ -10,7 +10,7 @@
 
 export const firebaseConfig = {
   apiKey: "AIzaSyC8pFCz1HoDcp7H0qZ5gOFxRFhIUF3zc_c",
-  authDomain: "shelter-online.firebaseapp.com",
+  authDomain: "Shelter-online.firebaseapp.com",
   databaseURL: "https://shelter-online-default-rtdb.europe-west1.firebasedatabase.app/",
   projectId: "shelter-online",
   storageBucket: "shelter-online.firebasestorage.app",
