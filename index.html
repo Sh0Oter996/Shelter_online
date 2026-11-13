@@ -1,0 +1,232 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+  <meta name="theme-color" content="#1a1a2e">
+  <title>Shelter — онлайн</title>
+  <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+<noscript>
+  <div class="card" style="margin-top:20px;">Для игры нужен включённый JavaScript.</div>
+</noscript>
+<header class="app-header">
+  <div class="brand">
+    <h1>🏚️ Shelter</h1>
+    <p>Выживите. Убедите остальных, что вы полезны.</p>
+  </div>
+  <div id="connectionPill" class="connection-pill" hidden></div>
+</header>
+
+<!-- ===== ЗАГРУЗКА ===== -->
+<section id="loadingScreen" class="screen active">
+  <div class="card loading-card">
+    <div class="spinner"></div>
+    <p>Подключаемся к комнате…</p>
+    <p id="loadingText" class="hint"></p>
+  </div>
+</section>
+
+<!-- ===== НАСТРОЙКА FIREBASE ===== -->
+<section id="setupScreen" class="screen">
+  <div class="card setup-card">
+    <h2>Нужно подключить облако</h2>
+    <p>Проект работает как статический сайт. Чтобы игроки на разных устройствах видели одну комнату, подключите Firebase Realtime Database.</p>
+    <ol class="setup-steps">
+      <li>Создайте проект на <a href="https://console.firebase.google.com/" target="_blank" rel="noopener">console.firebase.google.com</a>.</li>
+      <li>Добавьте веб-приложение и скопируйте его конфигурацию в файл <code>firebase-config.js</code>.</li>
+      <li>Включите <b>Authentication → Anonymous</b> и создайте <b>Realtime Database</b>.</li>
+      <li>Опубликуйте правила из <code>database.rules.json</code> во вкладке <b>Rules</b>.</li>
+    </ol>
+    <p class="hint">Подробная инструкция — в <code>README.md</code>. Без Firebase можно проверить игру в нескольких вкладках одного браузера.</p>
+    <p id="setupError" class="setup-error"></p>
+    <div class="setup-actions">
+      <button id="retryConnectBtn">Проверить снова</button>
+      <button id="localModeBtn" class="ghost">Локальный режим (вкладки)</button>
+    </div>
+  </div>
+</section>
+
+<!-- ===== ГЛАВНЫЙ ЭКРАН ===== -->
+<section id="homeScreen" class="screen">
+  <div class="home-grid">
+    <form id="createForm" class="card" autocomplete="off">
+      <h2>Создать комнату</h2>
+      <label class="field">Ваше имя
+        <input type="text" id="createName" maxlength="20" placeholder="Например, Алиса">
+      </label>
+      <label class="field">Сценарий
+        <select id="createScenario"></select>
+      </label>
+      <p id="createScenarioHint" class="hint"></p>
+      <label class="field">Сколько игроков должно выжить
+        <input type="number" id="createSurvivors" min="1" max="14" value="2">
+      </label>
+      <p class="hint">Число игроков станет известно после входа участников (от 4 до 15). Раунды и квоты голосований рассчитываются автоматически.</p>
+      <button type="submit" id="createBtn">Создать комнату</button>
+    </form>
+
+    <form id="joinForm" class="card" autocomplete="off">
+      <h2>Присоединиться</h2>
+      <label class="field">Ваше имя
+        <input type="text" id="joinName" maxlength="20" placeholder="Ваше имя за столом">
+      </label>
+      <label class="field">Код комнаты
+        <input type="text" id="joinCode" inputmode="numeric" maxlength="6" placeholder="6 цифр">
+      </label>
+      <p class="hint">Код показывает хост. Можно также открыть ссылку-приглашение — код подставится сам.</p>
+      <button type="submit" id="joinBtn">Войти в комнату</button>
+    </form>
+  </div>
+
+  <div class="card howto">
+    <h3>Как играть онлайн</h3>
+    <div class="howto-grid">
+      <div><b>1.</b> Хост создаёт комнату и отправляет ссылку или код.</div>
+      <div><b>2.</b> Каждый заходит со своего телефона или компьютера.</div>
+      <div><b>3.</b> Хост начинает игру — карты и раунды синхронизируются у всех.</div>
+    </div>
+    <p class="hint">Один игрок = одно устройство. Секретные карты видны только владельцу.</p>
+  </div>
+</section>
+
+<!-- ===== ЛОББИ ===== -->
+<section id="lobbyScreen" class="screen">
+  <div class="card lobby-card">
+    <div class="lobby-top">
+      <div class="lobby-code-block">
+        <span class="muted">Комната</span>
+        <span id="lobbyCode" class="room-code">------</span>
+        <button id="copyCodeBtn" class="ghost small-btn" type="button">Копировать код</button>
+      </div>
+      <button id="leaveLobbyBtn" class="ghost small-btn danger" type="button">Выйти</button>
+    </div>
+
+    <div class="invite-row">
+      <input id="inviteLink" type="text" readonly aria-label="Ссылка-приглашение">
+      <button id="copyInviteBtn" class="small-btn" type="button">Копировать ссылку</button>
+    </div>
+    <p id="lobbyModeNote" class="hint"></p>
+
+    <div class="lobby-body">
+      <div class="lobby-players-block">
+        <h3>Игроки <span id="lobbyCount" class="muted"></span></h3>
+        <div id="lobbyPlayers" class="player-list"></div>
+        <p id="lobbyHint" class="hint"></p>
+      </div>
+
+      <div id="lobbySettings" class="lobby-settings">
+        <h3>Настройки партии</h3>
+        <label class="field">Сценарий
+          <select id="lobbyScenario"></select>
+        </label>
+        <p id="lobbyScenarioHint" class="hint"></p>
+        <label class="field">Сколько игроков должно выжить
+          <input type="number" id="lobbySurvivors" min="1" max="14" value="2">
+        </label>
+        <p class="hint">Голосования распределятся автоматически, чтобы к финалу осталось нужное число выживших.</p>
+        <button id="startGameBtn" type="button">Начать игру</button>
+        <p id="startGameHint" class="hint"></p>
+      </div>
+
+      <div id="lobbyWait" class="lobby-wait" hidden>
+        <h3>Ждём хоста</h3>
+        <p>Хост настроит сценарий и начнёт игру. Экран обновится автоматически.</p>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ===== ИГРА ===== -->
+<section id="gameScreen" class="screen">
+  <div class="card game-topbar">
+    <div class="game-topbar-left">
+      <span class="room-code small" id="gameCode">------</span>
+      <span id="gameRound" class="game-round"></span>
+      <span id="gamePhase" class="phase-badge"></span>
+    </div>
+    <div class="game-topbar-actions">
+      <button id="playersBtn" class="small-btn ghost" type="button">👥 Игроки</button>
+      <button id="logBtn" class="small-btn ghost" type="button">📜 Журнал</button>
+      <button id="storyBtn" class="small-btn ghost" type="button">🏠 Бункер</button>
+      <button id="leaveGameBtn" class="small-btn ghost danger" type="button">Выйти</button>
+    </div>
+  </div>
+
+  <div id="hostOfflineBanner" class="banner warn" hidden>
+    ⏸️ Хост не в сети — игра ждёт его возвращения. Если хост закрыл вкладку, попросите его открыть игру снова по той же ссылке.
+  </div>
+
+  <div class="card bunker-bar" id="gameBunkerBar">
+    <div class="bunker-bar-head">
+      <span><b>Сценарий:</b> <span id="gameScenarioTitle">—</span></span>
+      <span id="gameBunkerMeta" class="muted"></span>
+    </div>
+    <div id="gameResources" class="resources-bar"></div>
+  </div>
+
+  <div id="gamePanels"></div>
+</section>
+
+<!-- ===== МОДАЛКА: ИГРОКИ ===== -->
+<div class="modal-overlay" id="playersModal" data-modal>
+  <div class="modal">
+    <button class="close-btn" data-close="playersModal" type="button">Закрыть ✕</button>
+    <h2>👥 Игроки</h2>
+    <p class="hint">У живых игроков видны только раскрытые характеристики. У изгнанных раскрываются все.</p>
+    <div id="playersModalContent"></div>
+  </div>
+</div>
+
+<!-- ===== МОДАЛКА: ЖУРНАЛ ===== -->
+<div class="modal-overlay" id="logModal" data-modal>
+  <div class="modal">
+    <button class="close-btn" data-close="logModal" type="button">Закрыть ✕</button>
+    <h2>📜 Журнал партии</h2>
+    <div id="gameLog" class="modal-log-content"></div>
+  </div>
+</div>
+
+<!-- ===== МОДАЛКА: БУНКЕР ===== -->
+<div class="modal-overlay" id="storyModal" data-modal>
+  <div class="modal story-modal">
+    <button class="close-btn" data-close="storyModal" type="button">Закрыть ✕</button>
+    <h2 id="storyTitle">Бункер</h2>
+    <div id="storyDesc" class="story-desc"></div>
+    <div id="storyRooms" class="story-rooms"></div>
+  </div>
+</div>
+
+<!-- ===== МОДАЛКА: КАРТА ДЕЙСТВИЯ ===== -->
+<div class="modal-overlay" id="actionModal" data-modal>
+  <div class="modal action-modal">
+    <button class="close-btn" data-close="actionModal" type="button">Отмена ✕</button>
+    <h2 id="actionModalTitle">Карта действия</h2>
+    <p class="hint" id="actionModalDesc"></p>
+    <div id="actionModalBody"></div>
+    <div class="action-modal-footer">
+      <button id="applyActionBtn" type="button">Применить</button>
+      <button id="cancelActionBtn" class="ghost" type="button">Отмена</button>
+    </div>
+  </div>
+</div>
+
+<!-- ===== МОДАЛКА: ПЕРЕЗАПУСК ===== -->
+<div class="modal-overlay" id="restartModal" data-modal>
+  <div class="modal">
+    <button class="close-btn" data-close="restartModal" type="button">Закрыть ✕</button>
+    <h2>🔄 Перезапустить игру?</h2>
+    <p>Текущая партия завершится, все игроки вернутся в лобби этой же комнаты. Карты будут розданы заново.</p>
+    <div class="modal-actions">
+      <button id="confirmRestartBtn" class="danger-btn" type="button">Да, перезапустить</button>
+      <button id="cancelRestartBtn" class="ghost" type="button">Отмена</button>
+    </div>
+  </div>
+</div>
+
+<div id="toast" class="toast" role="status" aria-live="polite"></div>
+
+<script type="module" src="js/main.js"></script>
+</body>
+</html>

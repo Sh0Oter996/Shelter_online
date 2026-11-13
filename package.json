@@ -1,0 +1,11 @@
+{
+  "name": "shelter-online",
+  "version": "2.0.0",
+  "private": true,
+  "type": "module",
+  "description": "Shelter — мультиплеерная веб-игра на Firebase Realtime Database",
+  "scripts": {
+    "serve": "node tools/serve.mjs",
+    "test": "node tests/engine.test.mjs && node tests/rules-consistency.mjs"
+  }
+}
