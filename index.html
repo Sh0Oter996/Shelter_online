@@ -125,7 +125,44 @@
         <label class="field">Сколько игроков должно выжить
           <input type="number" id="lobbySurvivors" min="1" max="14" value="2">
         </label>
-        <p class="hint">Голосования распределятся автоматически, чтобы к финалу осталось нужное число выживших.</p>
+
+        <div class="lobby-section">
+          <h4>Голосования</h4>
+          <label class="field">Режим
+            <select id="lobbyVoteMode">
+              <option value="auto">Автоматически</option>
+              <option value="manual">Вручную</option>
+            </select>
+          </label>
+          <p id="lobbyVoteAutoHint" class="hint"></p>
+
+          <div id="lobbyVoteManual" hidden>
+            <label class="field">Раунды голосования (через запятую)
+              <input type="text" id="lobbyVoteRounds" placeholder="2, 4, 6">
+            </label>
+            <div id="lobbyVoteQuotas"></div>
+            <button id="lobbyVoteAutoFillBtn" class="ghost small-btn" type="button">Заполнить автоматически</button>
+            <p id="lobbyVoteHint" class="plan-hint"></p>
+          </div>
+        </div>
+
+        <details class="advanced-settings">
+          <summary>Вероятности характеристик</summary>
+          <p class="hint">Это веса, а не проценты: сумма нормализуется. Значение 0 полностью исключает вариант; если все веса группы 0, используется равномерное распределение.</p>
+
+          <h4>Возраст</h4>
+          <p class="hint">Сначала выбирается категория с учётом веса, затем равновероятно конкретный возраст внутри неё.</p>
+          <div id="lobbyAgeWeights" class="weight-grid"></div>
+
+          <h4>Здоровье</h4>
+          <p class="hint">Сначала категория, затем равновероятно конкретное состояние внутри категории.</p>
+          <div id="lobbyHealthWeights" class="weight-grid"></div>
+
+          <h4>Ориентация</h4>
+          <p class="hint">Для каждого игрока независимо выбирается вариант с заданным весом.</p>
+          <div id="lobbyOrientationWeights" class="weight-grid"></div>
+        </details>
+
         <button id="startGameBtn" type="button">Начать игру</button>
         <p id="startGameHint" class="hint"></p>
       </div>
@@ -150,6 +187,7 @@
       <button id="playersBtn" class="small-btn ghost" type="button">👥 Игроки</button>
       <button id="logBtn" class="small-btn ghost" type="button">📜 Журнал</button>
       <button id="storyBtn" class="small-btn ghost" type="button">🏠 Бункер</button>
+      <button id="hostRestartBtn" class="small-btn ghost danger" type="button" hidden>🔄 Перезапуск</button>
       <button id="leaveGameBtn" class="small-btn ghost danger" type="button">Выйти</button>
     </div>
   </div>

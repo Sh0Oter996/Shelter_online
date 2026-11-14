@@ -14,17 +14,30 @@ const CDN = `https://www.gstatic.com/firebasejs/${FIREBASE_VERSION}`;
 
 function friendlyAuthError(error) {
     const code = error && error.code ? String(error.code) : '';
-    if (code === 'auth/operation-not-allowed') {
+
+    const anonymousDisabled = 'Анонимный вход запрещён в Firebase. Откройте Firebase Console → Authentication → Sign-in method → Anonymous → Enable → Save. Проверьте, что вы в проекте, который указан в firebase-config.js.';
+
+    const messages = {
+        'auth/admin-restricted-operation': anonymousDisabled,
+        'auth/operation-not-allowed': anonymousDisabled,
+        'auth/configuration-not-found': 'В Firebase не настроен вход. Откройте Authentication → Get started и включите Anonymous.',
+        'auth/unauthorized-domain': 'Домен сайта не разрешён в Firebase Auth. Добавьте его в Authentication → Settings → Authorized domains.',
+        'auth/invalid-api-key': 'Неверный apiKey в firebase-config.js. Скопируйте конфигурацию веб-приложения заново из Firebase Console.',
+        'auth/api-key-not-valid': 'apiKey недействителен или принадлежит другому проекту Firebase. Скопируйте конфигурацию заново.',
+        'auth/network-request-failed': 'Нет связи с Firebase. Проверьте интернет, VPN и настройки проекта.',
+        'auth/too-many-requests': 'Слишком много попыток входа. Подождите несколько минут и обновите страницу.',
+        'auth/quota-exceeded': 'Превышена квота Firebase Authentication. Проверьте лимиты проекта.'
+    };
+
+    if (messages[code]) {
+        return Object.assign(new Error(`${messages[code]} (${code})`), { code });
+    }
+    if (code.startsWith('auth/requests-from-referer')) {
         return Object.assign(new Error(
-            'Анонимный вход выключен. В Firebase Console откройте Authentication → Sign-in method и включите Anonymous.'
+            'Запрос заблокирован ограничением API key по HTTP referrer. Разрешите домен сайта в Google Cloud Console → APIs & Services → Credentials → API key или используйте ключ без referrer-ограничений.'
         ), { code });
     }
-    if (code === 'auth/invalid-api-key') {
-        return Object.assign(new Error('Неверный apiKey в firebase-config.js.'), { code });
-    }
-    if (code === 'auth/network-request-failed') {
-        return Object.assign(new Error('Нет связи с Firebase. Проверьте интернет и настройки проекта.'), { code });
-    }
+
     return error;
 }
 

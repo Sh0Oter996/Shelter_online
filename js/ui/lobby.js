@@ -1,30 +1,61 @@
 'use strict';
 
+import {
+    POOLS,
+    AGE_CATEGORIES,
+    HEALTH_CATEGORIES,
+    DEFAULT_GENERATION
+} from '../config.js';
+import { computeVotePlan, parseManualVotePlan } from '../game/engine.js';
 import { $, toast, escapeHtml, isOnline } from './dom.js';
 
 let handlers = null;
 let eventsBound = false;
 let formInitializedFor = null;
+let renderedQuotaRoundsKey = null;
 
 export function initLobby(options) {
     handlers = options;
     if (eventsBound) return;
     eventsBound = true;
 
+    setDefaultWeights();
+
     $('lobbyScenario').addEventListener('change', updateLobbyScenarioHint);
+    $('lobbyVoteMode').addEventListener('change', () => {
+        if ($('lobbyVoteMode').value === 'manual' && !$('lobbyVoteRounds').value.trim()) {
+            fillAutoVotePlan();
+        }
+        refreshVoteUi();
+    });
+    $('lobbyVoteRounds').addEventListener('input', () => renderVoteQuotaRows());
+    $('lobbyVoteAutoFillBtn').addEventListener('click', fillAutoVotePlan);
+
+    $('lobbySurvivors').addEventListener('input', refreshVoteUi);
+    $('lobbySurvivors').addEventListener('change', refreshVoteUi);
+
+    $('lobbyVoteQuotas').addEventListener('input', updateVoteHint);
+    $('lobbyVoteQuotas').addEventListener('change', event => {
+        const input = event.target.closest('[data-vote-round]');
+        if (!input) return;
+        const count = playerCount();
+        const max = maxPerVote(count, effectiveSurvivors(count));
+        const value = Math.max(1, Math.min(max, parseInt(input.value, 10) || 1));
+        input.value = value;
+        updateVoteHint();
+    });
 
     $('startGameBtn').addEventListener('click', () => {
         if (!handlers || !handlers.onStart) return;
-        const count = handlers.getPlayerCount ? handlers.getPlayerCount() : 0;
+        const count = playerCount();
         if (count < 4) {
             toast('Для старта нужно минимум 4 игрока.', 'error');
             return;
         }
-        const survivors = parseInt($('lobbySurvivors').value, 10) || 1;
-        handlers.onStart({
-            scenarioId: $('lobbyScenario').value || 'random',
-            survivors
-        });
+
+        const settings = collectStartSettings();
+        if (!settings) return;
+        handlers.onStart(settings);
     });
 
     $('leaveLobbyBtn').addEventListener('click', () => {
@@ -50,6 +81,36 @@ export function initLobby(options) {
 
 export function resetLobbyForm() {
     formInitializedFor = null;
+    renderedQuotaRoundsKey = null;
+    if (!eventsBound) return;
+    $('lobbyVoteMode').value = 'auto';
+    $('lobbyVoteRounds').value = '';
+    $('lobbyVoteQuotas').innerHTML = '';
+    setDefaultWeights();
+}
+
+function setDefaultWeights() {
+    renderWeightInputs('lobbyAgeWeights', AGE_CATEGORIES, DEFAULT_GENERATION.ageWeights, 'age');
+    renderWeightInputs('lobbyHealthWeights', HEALTH_CATEGORIES, DEFAULT_GENERATION.healthWeights, 'health');
+    renderWeightInputs(
+        'lobbyOrientationWeights',
+        POOLS.orientation.map(value => ({ label: value })),
+        DEFAULT_GENERATION.orientationWeights,
+        'orientation'
+    );
+}
+
+function renderWeightInputs(containerId, items, weights, dataAttr) {
+    const container = $(containerId);
+    if (!container) return;
+    container.innerHTML = items.map((item, index) => `
+        <label class="weight-field">
+            <span>${escapeHtml(item.label)}</span>
+            <input type="number" min="0" max="100" step="1"
+                value="${Number(weights[index]) || 0}"
+                data-${dataAttr}-weight="${index}">
+        </label>
+    `).join('');
 }
 
 function updateLobbyScenarioHint() {
@@ -59,8 +120,6 @@ function updateLobbyScenarioHint() {
         hint.textContent = 'Случайный сценарий будет выбран при старте.';
         return;
     }
-    // Полное описание сценария доступно в модалке «Бункер» после старта,
-    // в лобби достаточно названия.
     hint.textContent = '';
 }
 
@@ -69,6 +128,185 @@ function sortedMembers(members) {
         .map(([uid, member]) => ({ uid, ...(member || {}) }))
         .filter(member => member.name)
         .sort((a, b) => (Number(a.joinedAt) || 0) - (Number(b.joinedAt) || 0));
+}
+
+function playerCount() {
+    return handlers && handlers.getPlayerCount ? handlers.getPlayerCount() : 0;
+}
+
+function rawSurvivors() {
+    return Math.max(1, parseInt($('lobbySurvivors').value, 10) || 2);
+}
+
+function effectiveSurvivors(count) {
+    return Math.min(rawSurvivors(), Math.max(1, count - 1));
+}
+
+function maxPerVote(count, survivors) {
+    return Math.max(1, count - survivors);
+}
+
+function parseRounds(value) {
+    return [...new Set(
+        String(value || '')
+            .split(',')
+            .map(item => parseInt(item.trim(), 10))
+            .filter(item => Number.isFinite(item) && item >= 1 && item <= 11)
+    )].sort((a, b) => a - b);
+}
+
+function quotaInputs() {
+    const result = {};
+    $('lobbyVoteQuotas').querySelectorAll('[data-vote-round]').forEach(input => {
+        result[Number(input.dataset.voteRound)] = parseInt(input.value, 10) || 1;
+    });
+    return result;
+}
+
+function renderVoteQuotaRows(seed = null, force = false) {
+    if (!eventsBound) return;
+    const rounds = parseRounds($('lobbyVoteRounds').value);
+    const count = playerCount();
+    const survivors = effectiveSurvivors(count);
+    const max = maxPerVote(count, survivors);
+    const existing = Object.assign({}, quotaInputs(), seed || {});
+
+    const key = `${rounds.join(',')}|${max}|${seed ? JSON.stringify(seed) : ''}`;
+    if (!force && key === renderedQuotaRoundsKey) {
+        updateVoteHint();
+        return;
+    }
+    renderedQuotaRoundsKey = key;
+
+    const container = $('lobbyVoteQuotas');
+    if (rounds.length === 0) {
+        container.innerHTML = '<p class="hint">Укажите хотя бы один раунд от 1 до 11.</p>';
+        updateVoteHint();
+        return;
+    }
+
+    container.innerHTML = rounds.map(round => {
+        const value = Math.max(1, Math.min(max, Number(existing[round]) || 1));
+        return `<div class="quota-row">
+            <span>После раунда <b>${round}</b> изгнать</span>
+            <input type="number" min="1" max="${max}" value="${value}" data-vote-round="${round}">
+            <span>игрок(ов)</span>
+        </div>`;
+    }).join('');
+
+    updateVoteHint();
+}
+
+function fillAutoVotePlan() {
+    const count = playerCount();
+    const survivors = effectiveSurvivors(count);
+    const plan = computeVotePlan(count, survivors);
+    $('lobbyVoteRounds').value = plan.rounds.join(', ');
+    renderVoteQuotaRows(plan.quotas, true);
+}
+
+function currentManualPlan(count, survivors) {
+    const rounds = parseRounds($('lobbyVoteRounds').value);
+    const quotas = quotaInputs();
+    return parseManualVotePlan(rounds, quotas, count, survivors);
+}
+
+function updateVoteHint() {
+    if (!eventsBound) return;
+    const count = playerCount();
+    const survivors = effectiveSurvivors(count);
+    const needed = Math.max(0, count - survivors);
+    const mode = $('lobbyVoteMode').value;
+    const hint = $('lobbyVoteHint');
+    const startHint = $('startGameHint');
+    const startButton = $('startGameBtn');
+
+    let manualValid = true;
+    let planned = 0;
+
+    if (mode === 'manual') {
+        const result = currentManualPlan(count, survivors);
+        manualValid = result.ok;
+        if (result.ok) {
+            planned = result.plan.rounds.reduce((sum, round) => sum + result.plan.quotas[round], 0);
+        }
+        hint.className = `plan-hint ${manualValid ? 'ok' : 'warn'}`;
+        hint.textContent = result.ok
+            ? `Будет изгнано ${planned}; нужно ${needed}, чтобы осталось ${survivors}.`
+            : result.error;
+    } else {
+        hint.textContent = '';
+        hint.className = 'plan-hint';
+    }
+
+    const canStart = count >= 4 && count <= 15 && manualValid;
+    startButton.disabled = !canStart;
+
+    if (count < 4) {
+        startHint.textContent = `Минимум 4 игрока, сейчас ${count}.`;
+    } else if (count > 15) {
+        startHint.textContent = 'В комнате больше 15 игроков — это максимум.';
+    } else if (mode === 'manual' && !manualValid) {
+        startHint.textContent = 'Исправьте ручной план голосований.';
+    } else {
+        startHint.textContent = `Игроков: ${count}. Выживших: ${survivors}.`;
+    }
+}
+
+function refreshVoteUi() {
+    if (!eventsBound) return;
+    const count = playerCount();
+    const survivors = effectiveSurvivors(count);
+    const manual = $('lobbyVoteMode').value === 'manual';
+    $('lobbyVoteManual').hidden = !manual;
+
+    const auto = computeVotePlan(count, survivors);
+    $('lobbyVoteAutoHint').textContent = auto.rounds.length
+        ? `Автоматически: ${auto.rounds.map(round => `после ${round} — ${auto.quotas[round]}`).join('; ')}.`
+        : 'Автоматически: голосований не потребуется.';
+
+    if (manual) renderVoteQuotaRows();
+    else updateVoteHint();
+}
+
+function readWeights(containerId) {
+    return Array.from($(containerId).querySelectorAll('input'))
+        .map(input => Math.max(0, Math.min(100, Number(input.value) || 0)));
+}
+
+function collectStartSettings() {
+    const count = playerCount();
+    const survivors = effectiveSurvivors(count);
+    const voteMode = $('lobbyVoteMode').value === 'manual' ? 'manual' : 'auto';
+    const generation = {
+        ageWeights: readWeights('lobbyAgeWeights'),
+        healthWeights: readWeights('lobbyHealthWeights'),
+        orientationWeights: readWeights('lobbyOrientationWeights')
+    };
+
+    let voteRounds = null;
+    let voteQuotas = null;
+
+    if (voteMode === 'manual') {
+        const rounds = parseRounds($('lobbyVoteRounds').value);
+        const quotas = quotaInputs();
+        const validation = parseManualVotePlan(rounds, quotas, count, survivors);
+        if (!validation.ok) {
+            toast(validation.error, 'error', 6000);
+            return null;
+        }
+        voteRounds = validation.plan.rounds;
+        voteQuotas = validation.plan.quotas;
+    }
+
+    return {
+        scenarioId: $('lobbyScenario').value || 'random',
+        survivors,
+        voteMode,
+        voteRounds,
+        voteQuotas,
+        generation
+    };
 }
 
 export function renderLobby(app) {
@@ -132,22 +370,16 @@ export function renderLobby(app) {
         }
 
         $('lobbySurvivors').max = Math.max(1, count - 1);
-        const survivors = parseInt($('lobbySurvivors').value, 10) || 2;
-        const effectiveSurvivors = Math.min(survivors, Math.max(1, count - 1));
-
-        const canStart = count >= 4 && count <= 15;
-        $('startGameBtn').disabled = !canStart;
 
         if (count < 4) {
             $('lobbyHint').textContent = `Нужно ещё ${4 - count} игрок(ов). Отправьте ссылку-приглашение.`;
-            $('startGameHint').textContent = `Минимум 4 игрока, сейчас ${count}.`;
         } else if (count > 15) {
             $('lobbyHint').textContent = 'В комнате больше 15 игроков — это максимум.';
-            $('startGameHint').textContent = 'Кто-то должен выйти из комнаты.';
         } else {
             $('lobbyHint').textContent = 'Все готовы. Хост может начинать.';
-            $('startGameHint').textContent = `Игроков: ${count}. Выживших: ${effectiveSurvivors}.`;
         }
+
+        refreshVoteUi();
     } else {
         $('lobbyHint').textContent = hostMember
             ? `Хост: ${hostMember.name}. Ждём начала игры — экран обновится автоматически.`

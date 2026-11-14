@@ -721,6 +721,58 @@ code {
 }
 .lobby-settings .field input,
 .lobby-settings .field select { background: #16213e; }
+
+.lobby-section {
+    margin-top: 16px;
+    padding-top: 12px;
+    border-top: 1px solid #2a3a5e;
+}
+.lobby-section h4,
+.advanced-settings h4 {
+    margin: 14px 0 6px;
+    color: #f0a500;
+    font-size: 14px;
+}
+.advanced-settings {
+    margin-top: 16px;
+    padding-top: 12px;
+    border-top: 1px solid #2a3a5e;
+}
+.advanced-settings summary {
+    cursor: pointer;
+    color: #f0a500;
+    font-weight: bold;
+    font-size: 14px;
+    padding: 4px 0;
+}
+.advanced-settings summary:hover { color: #ffd479; }
+.advanced-settings[open] summary { margin-bottom: 8px; }
+.weight-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(120px, 1fr));
+    gap: 8px;
+    margin: 8px 0 4px;
+}
+.weight-field {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+    background: #16213e;
+    border: 1px solid #2a3a5e;
+    border-radius: 8px;
+    padding: 6px 8px;
+    color: #b8b8c8;
+    font-size: 12px;
+}
+.weight-field span { line-height: 1.3; }
+.weight-field input {
+    width: 100%;
+    box-sizing: border-box;
+    margin: 0;
+    padding: 6px 8px;
+    background: #0f0f1a;
+}
+#lobbyVoteHint { margin-bottom: 0; }
 .lobby-wait {
     background: #101f36;
     border: 1px dashed #f0a500;
@@ -942,6 +994,7 @@ code {
 .log-entry.log-elimination { color: #ff8fa0; }
 .log-entry.log-reveal { color: #8fc8ff; }
 .log-entry.log-action { color: #ffd479; }
+.log-entry.log-condition { color: #d7b8ff; font-weight: bold; }
 .log-entry.log-room { color: #9fe6a0; }
 .log-entry.log-round { color: #f0a500; margin-top: 6px; }
 

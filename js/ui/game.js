@@ -33,6 +33,10 @@ export function initGameUI(app) {
         }
     });
 
+    $('hostRestartBtn').addEventListener('click', () => {
+        openModal('restartModal');
+    });
+
     $('gamePanels').addEventListener('click', event => handlePanelClick(event, appRef));
 
     $('applyActionBtn').addEventListener('click', () => applyActionCard(appRef));
@@ -68,6 +72,10 @@ export function renderGame(app) {
     const badge = $('gamePhase');
     badge.textContent = phaseLabel(phase);
     badge.className = `phase-badge phase-${phase}`;
+
+    const isHost = app.meta.hostUid === app.uid;
+    $('hostRestartBtn').hidden = !isHost || !app.state ||
+        app.state.status === 'ended' || app.state.phase === 'ended';
 
     renderBunkerBar(app);
     renderHostBanner(app);
@@ -292,7 +300,9 @@ function ownCardPanel(app, compact = false) {
     if (conditionCard) {
         const hint = conditionCard.trigger === 'entry'
             ? 'Сработает в финале, если вы пройдёте в бункер.'
-            : 'Сработает в финале, если вас изгонят.';
+            : conditionCard.trigger === 'immediate'
+                ? 'Сработает сразу после вашего изгнания.'
+                : 'Сработает в финале, если вас изгонят.';
         conditionBlock = `<div class="secret-card condition-card">
             <div class="secret-card-title">🎴 Секретное условие</div>
             <div class="secret-card-name">${escapeHtml(conditionCard.name)}</div>

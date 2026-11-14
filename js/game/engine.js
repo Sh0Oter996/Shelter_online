@@ -10,8 +10,13 @@
 import {
     CUSTOM_MARKER,
     POOLS,
+    LUGGAGE_POOL,
+    FACT_POOL,
     FIELDS,
     REVEALABLE_FIELDS,
+    AGE_CATEGORIES,
+    HEALTH_CATEGORIES,
+    DEFAULT_GENERATION,
     RESOURCE_META,
     SCENARIOS,
     PROFESSION_EFFECTS,
@@ -45,7 +50,16 @@ import {
 export const MIN_PLAYERS = 4;
 export const MAX_PLAYERS = 15;
 export const LOG_LIMIT = 120;
-export const STATE_VERSION = 1;
+export const STATE_VERSION = 2;
+
+const ROOM_ITEM_NAMES = new Set(
+    SCENARIOS.flatMap(scenario =>
+        scenario.rooms.flatMap(room => (room.inventory || []).map(item => item.name))
+    )
+);
+const ROOM_ITEM_NAMES_LOWER = new Set(
+    [...ROOM_ITEM_NAMES].map(name => String(name).trim().toLowerCase())
+);
 
 // ---------------------------------------------------------------------------
 //  Справочники
@@ -69,6 +83,27 @@ export function displayValue(field, player) {
     if (raw == null || raw === '') return '—';
     if (field.key === 'age') return `${raw} лет`;
     return raw;
+}
+
+function traitGroupKeys(key) {
+    if (key === 'luggage1' || key === 'luggage2') return ['luggage1', 'luggage2'];
+    if (key === 'fact1' || key === 'fact2') return ['fact1', 'fact2'];
+    return [key];
+}
+
+function isTraitValueTaken(state, uid, key, value) {
+    const normalized = String(value == null ? '' : value).trim().toLowerCase();
+    if (!normalized) return false;
+    const keys = traitGroupKeys(key);
+
+    return state.players.some(player =>
+        keys.some(candidateKey => {
+            if (player.uid === uid && candidateKey === key) return false;
+            const raw = player[candidateKey];
+            if (raw == null || raw === CUSTOM_MARKER || raw === '—') return false;
+            return String(raw).trim().toLowerCase() === normalized;
+        })
+    );
 }
 
 // ---------------------------------------------------------------------------
@@ -213,7 +248,192 @@ function ensureRoomOpeners(list, scenario) {
     });
 }
 
-function generatePlayers(entries, scenario) {
+function normalizeWeights(raw, count) {
+    const source = Array.isArray(raw) ? raw : toArray(raw);
+    const weights = Array.from({ length: count }, (_, index) => {
+        const value = Number(source[index]);
+        return Number.isFinite(value) && value > 0 ? value : 0;
+    });
+    return weights.every(weight => weight === 0) ? Array(count).fill(1) : weights;
+}
+
+export function normalizeGeneration(raw) {
+    const source = raw && typeof raw === 'object' ? raw : {};
+    return {
+        ageWeights: normalizeWeights(
+            source.ageWeights || DEFAULT_GENERATION.ageWeights,
+            AGE_CATEGORIES.length
+        ),
+        healthWeights: normalizeWeights(
+            source.healthWeights || DEFAULT_GENERATION.healthWeights,
+            HEALTH_CATEGORIES.length
+        ),
+        orientationWeights: normalizeWeights(
+            source.orientationWeights || DEFAULT_GENERATION.orientationWeights,
+            POOLS.orientation.length
+        )
+    };
+}
+
+function weightedIndex(weights, indices) {
+    if (!indices || indices.length === 0) return -1;
+    const available = indices.filter(index => (weights[index] || 0) > 0);
+    if (available.length === 0) return randomItem(indices);
+
+    const total = available.reduce((sum, index) => sum + weights[index], 0);
+    let roll = Math.random() * total;
+    for (const index of available) {
+        roll -= weights[index];
+        if (roll < 0) return index;
+    }
+    return available[available.length - 1];
+}
+
+function generateUniqueAges(count, weights) {
+    const categories = AGE_CATEGORIES.map((category, index) => ({
+        index,
+        values: Array.from(
+            { length: category.max - category.min + 1 },
+            (_, offset) => category.min + offset
+        )
+    }));
+    const used = new Set();
+    const ages = [];
+
+    for (let n = 0; n < count; n++) {
+        const available = categories.filter(category =>
+            category.values.some(value => !used.has(value))
+        );
+
+        if (available.length === 0) {
+            let fallback = 10;
+            while (fallback <= 100 && used.has(fallback)) fallback++;
+            used.add(fallback);
+            ages.push(fallback);
+            continue;
+        }
+
+        const category = categories[weightedIndex(weights, available.map(item => item.index))];
+        const unused = category.values.filter(value => !used.has(value));
+        const age = randomItem(unused);
+        used.add(age);
+        ages.push(age);
+    }
+
+    return ages;
+}
+
+function generateUniqueHealth(count, weights) {
+    const categories = HEALTH_CATEGORIES.map((category, index) => ({
+        index,
+        remaining: category.values.slice()
+    }));
+    const health = [];
+
+    for (let n = 0; n < count; n++) {
+        const available = categories.filter(category => category.remaining.length > 0);
+        if (available.length === 0) {
+            health.push('Идеальное здоровье');
+            continue;
+        }
+
+        const category = categories[weightedIndex(weights, available.map(item => item.index))];
+        const value = randomItem(category.remaining);
+        category.remaining = category.remaining.filter(item => item !== value);
+        health.push(value);
+    }
+
+    return health;
+}
+
+function generateOrientations(count, weights) {
+    const indices = POOLS.orientation.map((_, index) => index);
+    return Array.from(
+        { length: count },
+        () => POOLS.orientation[weightedIndex(weights, indices)]
+    );
+}
+
+function assignUniqueField(players, key, pool) {
+    const field = FIELDS.find(item => item.key === key) || {};
+    const customChance = field.customChance || 0;
+    const customPlayers = [];
+    const normalPlayers = [];
+
+    players.forEach((player, index) => {
+        if (customChance > 0 && Math.random() < customChance) customPlayers.push(index);
+        else normalPlayers.push(index);
+    });
+
+    // Не больше одного «Придумай сам» на характеристику: иначе два игрока
+    // визуально получают одинаковый маркер, а уникальность проверяется только
+    // после ввода значения.
+    if (customPlayers.length > 1) {
+        const keep = randomItem(customPlayers);
+        customPlayers.forEach(playerIndex => {
+            if (playerIndex !== keep) normalPlayers.push(playerIndex);
+        });
+        customPlayers.length = 0;
+        customPlayers.push(keep);
+    }
+
+    const candidates = shuffle(
+        ensurePoolSize(Array.from(new Set(pool)), normalPlayers.length, 'Вариант')
+    );
+    normalPlayers.forEach((playerIndex, valueIndex) => {
+        players[playerIndex][key] = candidates[valueIndex];
+    });
+    customPlayers.forEach(playerIndex => {
+        players[playerIndex][key] = CUSTOM_MARKER;
+    });
+}
+
+// Для багажа и фактов уникальность держится не только между игроками, но и
+// между двумя слотами одного игрока.
+function assignSharedSlots(players, keys, pool) {
+    const slots = [];
+
+    players.forEach((player, playerIndex) => {
+        keys.forEach(key => {
+            const field = FIELDS.find(item => item.key === key) || {};
+            const customChance = field.customChance || 0;
+            slots.push({
+                playerIndex,
+                key,
+                custom: customChance > 0 && Math.random() < customChance
+            });
+        });
+    });
+
+    const normalSlots = slots.filter(slot => !slot.custom);
+    const customSlots = slots.filter(slot => slot.custom);
+    if (customSlots.length > 1) {
+        const keep = randomItem(customSlots);
+        customSlots.forEach(slot => {
+            if (slot !== keep) {
+                slot.custom = false;
+                normalSlots.push(slot);
+            }
+        });
+    }
+
+    const candidates = shuffle(
+        ensurePoolSize(Array.from(new Set(pool)), normalSlots.length, 'Вариант')
+    );
+    normalSlots.forEach((slot, index) => {
+        players[slot.playerIndex][slot.key] = candidates[index];
+    });
+    slots.filter(slot => slot.custom).forEach(slot => {
+        players[slot.playerIndex][slot.key] = CUSTOM_MARKER;
+    });
+}
+
+function luggageCandidatePool() {
+    return Array.from(new Set(LUGGAGE_POOL))
+        .filter(item => !ROOM_ITEM_NAMES.has(item));
+}
+
+function generatePlayers(entries, scenario, generation) {
     const players = entries.map((entry, index) => ({
         uid: entry.uid,
         name: entry.name,
@@ -228,36 +448,24 @@ function generatePlayers(entries, scenario) {
         conditionCardTriggered: false
     }));
 
-    // По каждому полю отдельно раздаём значения: уникальные — без повторов,
-    // неуникальные — независимо. Часть игроков получает «придумай сам».
-    for (const key of Object.keys(POOLS)) {
-        const fieldMeta = FIELDS.find(f => f.key === key) || {};
-        const isUnique = fieldMeta.unique !== false;
-        const customChance = fieldMeta.customChance || 0;
+    const ages = generateUniqueAges(players.length, generation.ageWeights);
+    const health = generateUniqueHealth(players.length, generation.healthWeights);
+    const orientations = generateOrientations(players.length, generation.orientationWeights);
 
-        const customPlayers = [];
-        const normalPlayers = [];
-        for (let i = 0; i < players.length; i++) {
-            if (customChance > 0 && Math.random() < customChance) customPlayers.push(i);
-            else normalPlayers.push(i);
-        }
+    players.forEach((player, index) => {
+        player.age = ages[index];
+        player.health = health[index];
+        player.orientation = orientations[index];
+        player.sex = randomItem(POOLS.sex);
+    });
 
-        if (isUnique) {
-            const pool = ensurePoolSize(POOLS[key], normalPlayers.length, 'Вариант');
-            const shuffled = shuffle(pool).slice(0, normalPlayers.length);
-            normalPlayers.forEach((playerIndex, j) => {
-                players[playerIndex][key] = shuffled[j];
-            });
-        } else {
-            normalPlayers.forEach(playerIndex => {
-                players[playerIndex][key] = randomItem(POOLS[key]);
-            });
-        }
-
-        customPlayers.forEach(playerIndex => {
-            players[playerIndex][key] = CUSTOM_MARKER;
-        });
-    }
+    assignUniqueField(players, 'profession', POOLS.profession);
+    assignUniqueField(players, 'hobby', POOLS.hobby);
+    assignUniqueField(players, 'phobia', POOLS.phobia);
+    assignUniqueField(players, 'skill', POOLS.skill);
+    assignUniqueField(players, 'character', POOLS.character);
+    assignSharedSlots(players, ['luggage1', 'luggage2'], luggageCandidatePool());
+    assignSharedSlots(players, ['fact1', 'fact2'], FACT_POOL);
 
     ensureRoomOpeners(players, scenario);
 
@@ -312,6 +520,47 @@ export function computeVotePlan(totalPlayers, survivorsWanted) {
     const quotas = {};
     rounds.forEach(r => { quotas[r] = 1; });
     return { rounds, quotas };
+}
+
+// Ручной план: хост сам указывает, после каких раундов голосовать и сколько
+// игроков изгонять на каждом голосовании.
+export function parseManualVotePlan(roundsInput, quotasInput, totalPlayers, survivorsWanted) {
+    const needed = Math.max(0, totalPlayers - survivorsWanted);
+    const maxRound = REVEALABLE_FIELDS.length;
+    const maxPerVote = Math.max(1, totalPlayers - survivorsWanted);
+
+    const rawRounds = Array.isArray(roundsInput)
+        ? roundsInput
+        : typeof roundsInput === 'string'
+            ? roundsInput.split(',')
+            : toArray(roundsInput);
+
+    const rounds = [...new Set(
+        rawRounds
+            .map(value => parseInt(value, 10))
+            .filter(value => Number.isFinite(value) && value >= 1 && value <= maxRound)
+    )].sort((a, b) => a - b);
+
+    if (rounds.length === 0) {
+        return { ok: false, error: `Укажите хотя бы один раунд голосования (1–${maxRound}).` };
+    }
+
+    const quotas = {};
+    rounds.forEach(round => {
+        let value = parseInt(quotasInput && quotasInput[round], 10);
+        if (!Number.isFinite(value) || value < 1) value = 1;
+        quotas[round] = Math.min(maxPerVote, value);
+    });
+
+    const planned = rounds.reduce((sum, round) => sum + quotas[round], 0);
+    if (planned < needed) {
+        return {
+            ok: false,
+            error: `План изгоняет ${planned} игрок(ов), а для ${survivorsWanted} выживших нужно ${needed}. Увеличьте число изгнаний.`
+        };
+    }
+
+    return { ok: true, plan: { rounds, quotas } };
 }
 
 // ---------------------------------------------------------------------------
@@ -425,14 +674,35 @@ export function startGame(state, members, settings = {}) {
         1,
         entries.length - 1
     );
-    const plan = computeVotePlan(entries.length, survivorsTarget);
+
+    const voteMode = settings.voteMode === 'manual' ? 'manual' : 'auto';
+    let plan;
+    if (voteMode === 'manual') {
+        const manual = parseManualVotePlan(
+            settings.voteRounds,
+            settings.voteQuotas,
+            entries.length,
+            survivorsTarget
+        );
+        if (!manual.ok) return manual;
+        plan = manual.plan;
+    } else {
+        plan = computeVotePlan(entries.length, survivorsTarget);
+    }
+
+    const generation = normalizeGeneration(settings.generation);
 
     state.status = 'playing';
     state.phase = 'story';
     state.scenarioId = scenario.id;
-    state.settings = { survivors: survivorsTarget, maxPlayers: MAX_PLAYERS };
+    state.settings = {
+        survivors: survivorsTarget,
+        maxPlayers: MAX_PLAYERS,
+        voteMode,
+        generation
+    };
     state.survivorsTarget = survivorsTarget;
-    state.players = generatePlayers(entries, scenario);
+    state.players = generatePlayers(entries, scenario, generation);
     state.round = 1;
     state.currentUid = null;
     state.currentVoterUid = null;
@@ -552,6 +822,12 @@ export function revealTrait(state, uid, key, customValue) {
         const value = String(customValue == null ? '' : customValue).replace(/\s+/g, ' ').trim();
         if (!value) return { ok: false, error: 'Введите своё значение характеристики.' };
         if (value.length > 60) return { ok: false, error: 'Слишком длинное значение (максимум 60 символов).' };
+        if (isTraitValueTaken(state, uid, key, value)) {
+            return { ok: false, error: 'Такое значение уже есть у другого игрока. Все характеристики, кроме пола и ориентации, должны быть уникальны.' };
+        }
+        if ((key === 'luggage1' || key === 'luggage2') && ROOM_ITEM_NAMES_LOWER.has(value.toLowerCase())) {
+            return { ok: false, error: 'Этот предмет уже есть в инвентаре комнат бункера. Придумайте другой багаж.' };
+        }
         player[key] = field.key === 'age' && /^\d{1,3}$/.test(value) ? Number(value) : value;
     }
 
@@ -780,12 +1056,92 @@ export function resolveVoteResults(state) {
     return { ok: true, state };
 }
 
+function shiftAgesUniquely(players, delta) {
+    const used = new Set();
+    const order = shuffle(players);
+
+    order.forEach(player => {
+        const current = Number(player.age);
+        const base = clamp(Number.isFinite(current) ? current + delta : 50 + delta, 10, 100);
+        let candidate = base;
+        let offset = 1;
+
+        // Сохраняем уникальность возрастов, даже если сдвиг создаёт коллизию.
+        while (used.has(candidate) && offset <= 200) {
+            const up = clamp(base + offset, 10, 100);
+            const down = clamp(base - offset, 10, 100);
+            if (!used.has(up)) {
+                candidate = up;
+                break;
+            }
+            if (!used.has(down)) {
+                candidate = down;
+                break;
+            }
+            offset += 1;
+        }
+
+        player.age = candidate;
+        used.add(candidate);
+    });
+}
+
+function shuffleRevealedField(state, fieldKey) {
+    const participants = state.players.filter(player => {
+        const isPublic = !!player.revealed[fieldKey] || !player.alive;
+        const value = player[fieldKey];
+        return isPublic && value !== CUSTOM_MARKER && value != null && value !== '—';
+    });
+
+    if (participants.length < 2) return { count: participants.length };
+
+    const values = shuffle(participants.map(player => player[fieldKey]));
+    participants.forEach((player, index) => {
+        player[fieldKey] = values[index];
+        player.revealed[fieldKey] = true;
+    });
+
+    return { count: participants.length };
+}
+
+function applyImmediateCondition(state, player) {
+    const card = getConditionCard(player.conditionCardId);
+    if (!card || card.trigger !== 'immediate' || player.conditionCardTriggered) return;
+
+    player.conditionCardTriggered = true;
+
+    if (card.effect.ageShift) {
+        const shift = Number(card.effect.ageShift) || 0;
+        shiftAgesUniquely(state.players, shift);
+        addLog(
+            state,
+            `🎴 «${card.name}»: ${player.name} изгнан(а), возраст всех игроков ${shift > 0 ? 'увеличился' : 'уменьшился'} на ${Math.abs(shift)} лет.`,
+            'condition'
+        );
+    }
+
+    if (card.effect.shuffleRevealed) {
+        const field = FIELDS.find(item => item.key === card.effect.shuffleRevealed);
+        const result = shuffleRevealedField(state, card.effect.shuffleRevealed);
+        if (field) {
+            addLog(
+                state,
+                result.count >= 2
+                    ? `🎴 «${card.name}»: открытые характеристики «${field.label}» перемешаны между игроками.`
+                    : `🎴 «${card.name}»: для перемешивания не хватило открытых характеристик «${field.label}».`,
+                'condition'
+            );
+        }
+    }
+}
+
 function markEliminated(state, uid) {
     const player = state.players.find(p => p.uid === uid);
     if (!player || !player.alive) return;
     player.alive = false;
     player.acted = true;
     addLog(state, `❌ ${player.name} изгнан(а) из убежища.`, 'elimination');
+    applyImmediateCondition(state, player);
 }
 
 function eliminate(state, uid) {
@@ -1041,6 +1397,10 @@ export function computeFinalState(state) {
     state.players.forEach(player => {
         const card = getConditionCard(player.conditionCardId);
         if (!card) return;
+        // Мгновенные условия уже применились в момент изгнания и не влияют
+        // на финальный расчёт повторно.
+        if (card.trigger === 'immediate') return;
+
         const applies = (card.trigger === 'entry' && player.alive) ||
                         (card.trigger === 'elimination' && !player.alive);
         player.conditionCardTriggered = applies;
@@ -1132,9 +1492,18 @@ function buildEndingData(state, final, result) {
     const negative = allEntries.filter(entry => effectSum(entry.effects) < 0);
     const neutral = allEntries.filter(entry => effectSum(entry.effects) === 0);
 
-    const triggeredConditions = final.conditionEntries
-        .map(entry => `${entry.source} — «${entry.label}»`)
-        .join(', ') || 'никакие';
+    const triggeredConditionsList = final.conditionEntries
+        .map(entry => `${entry.source} — «${entry.label}»`);
+
+    state.players.forEach(player => {
+        if (!player.conditionCardTriggered) return;
+        const card = getConditionCard(player.conditionCardId);
+        if (card && card.trigger === 'immediate') {
+            triggeredConditionsList.push(`${player.name} — «${card.name}» (сразу после изгнания)`);
+        }
+    });
+
+    const triggeredConditions = triggeredConditionsList.join(', ') || 'никакие';
 
     const skippedConditions = state.players
         .filter(p => p.conditionCardId && !p.conditionCardTriggered)
@@ -1151,9 +1520,13 @@ function buildEndingData(state, final, result) {
         let conditionText = 'нет';
         if (conditionCard) {
             if (player.conditionCardTriggered) {
-                conditionText = `${conditionCard.name} (сработало)`;
+                conditionText = conditionCard.trigger === 'immediate'
+                    ? `${conditionCard.name} (сработало сразу после изгнания)`
+                    : `${conditionCard.name} (сработало)`;
             } else if (conditionCard.trigger === 'entry') {
                 conditionText = `${conditionCard.name} (не сработало: не прошёл)`;
+            } else if (conditionCard.trigger === 'immediate') {
+                conditionText = `${conditionCard.name} (не сработало: игрок остался в бункере)`;
             } else {
                 conditionText = `${conditionCard.name} (не сработало)`;
             }

@@ -570,7 +570,7 @@ async function kickPlayer(uid) {
     }
 }
 
-async function startGameFlow({ scenarioId, survivors }) {
+async function startGameFlow({ scenarioId, survivors, voteMode, voteRounds, voteQuotas, generation }) {
     if (!app.isHostRoom()) {
         toast('Начать игру может только хост.', 'error');
         return;
@@ -583,7 +583,14 @@ async function startGameFlow({ scenarioId, survivors }) {
     const button = $('startGameBtn');
     setButtonBusy(button, true, 'Начинаем…');
     try {
-        await app.sendCommand('start', { scenarioId, survivors });
+        await app.sendCommand('start', {
+            scenarioId,
+            survivors,
+            voteMode,
+            voteRounds,
+            voteQuotas,
+            generation
+        });
     } catch (error) {
         toast(error.message || 'Не удалось начать игру.', 'error');
     } finally {
