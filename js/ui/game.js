@@ -79,6 +79,7 @@ export function renderGame(app) {
 
     renderBunkerBar(app);
     renderHostBanner(app);
+    renderGameNotifications(app);
 
     const panels = $('gamePanels');
     if (!app.state) {
@@ -97,7 +98,9 @@ function renderBunkerBar(app) {
     const state = app.state;
     const scenario = state && state.scenario;
     $('gameScenarioTitle').textContent = scenario ? scenario.title : '—';
-    $('gameBunkerMeta').textContent = scenario ? scenario.bunkerSize : '';
+    $('gameBunkerMeta').textContent = scenario
+        ? `${scenario.bunkerSize}${scenario.plannedStay ? ` · Планируемое время: ${scenario.plannedStay}` : ''}`
+        : '';
     $('gameResources').innerHTML = scenario
         ? resourceChips(state.baseResources, state.baseStability)
         : '';
@@ -114,6 +117,36 @@ function renderHostBanner(app) {
     const hostPresence = app.presence && app.presence[app.meta.hostUid];
     const online = isOnline(hostPresence);
     banner.hidden = online;
+}
+
+function renderGameNotifications(app) {
+    const box = $('gameNotifications');
+    const state = app.state;
+    if (!state) {
+        box.hidden = true;
+        box.innerHTML = '';
+        return;
+    }
+
+    const entries = toArray(state.log)
+        .filter(entry => entry.type === 'room' || entry.type === 'condition')
+        .slice(-4);
+
+    if (entries.length === 0) {
+        box.hidden = true;
+        box.innerHTML = '';
+        return;
+    }
+
+    box.hidden = false;
+    box.innerHTML = entries.map(entry => {
+        const isRoom = entry.type === 'room';
+        const text = String(entry.text || '').replace(/^[🔍🎴]\s*/u, '');
+        return `<div class="game-notification ${isRoom ? 'notification-room' : 'notification-condition'}">
+            <span class="notification-icon">${isRoom ? '🔍' : '🎴'}</span>
+            <span class="notification-text">${escapeHtml(text)}</span>
+        </div>`;
+    }).join('');
 }
 
 function resourceChips(resources, stability) {
@@ -212,6 +245,7 @@ function storyPanel(app) {
         <p class="story-desc">${escapeHtml(scenario.apocalypse)}</p>
         <p>${escapeHtml(scenario.bunkerDesc)}</p>
         <p class="story-meta">${escapeHtml(scenario.bunkerSize)}</p>
+        ${scenario.plannedStay ? `<p class="planned-stay">🕰️ Планируемое время в бункере: <b>${escapeHtml(scenario.plannedStay)}</b></p>` : ''}
         <p><b>Стартовые параметры бункера:</b></p>
         <div class="resources-bar">${resourceChips(state.baseResources, state.baseStability)}</div>
         <p class="hint">Все игроки изучают историю. Полное описание комнат — в кнопке «🏠 Бункер».</p>
@@ -315,6 +349,21 @@ function ownCardPanel(app, compact = false) {
         ? `<div class="bonus-luggage">🎒 Бонусный багаж: <b>${toArray(player.bonusLuggage).map(escapeHtml).join(', ')}</b></div>`
         : '';
 
+    const abilities = toArray(hand.roomAbilities);
+    const abilityBlock = abilities.length
+        ? `<div class="room-ability-note">
+            <div class="room-ability-title">🚪 Вы можете помочь бункеру</div>
+            <p>Если вы пройдёте в бункер, у вас будет доступ к этим комнатам:</p>
+            <ul>${abilities.map(ability => {
+                const matches = toArray(ability.matches)
+                    .map(match => `${escapeHtml(match.label)} «${escapeHtml(match.value)}»`)
+                    .join(', ');
+                return `<li>${ability.action === 'починить' ? '🔧 починить' : '🔓 открыть'} «${escapeHtml(ability.roomName)}» — ${matches}</li>`;
+            }).join('')}</ul>
+            <p class="hint">Это напоминание видите только вы.</p>
+           </div>`
+        : '';
+
     const statusHint = !alive
         ? `<p class="hint">Вы изгнаны и наблюдаете за партией.</p>`
         : myTurn
@@ -334,6 +383,7 @@ function ownCardPanel(app, compact = false) {
         ${actionBlock}
         ${conditionBlock}
         ${bonus}
+        ${abilityBlock}
         <div class="traits-grid">${traits}</div>
         ${isHost ? `<p class="host-note">👑 Вы хост: только вы можете начинать раунды, продолжать после голосований и перезапускать игру. Держите вкладку открытой.</p>` : ''}
     </div>`;
@@ -679,6 +729,7 @@ export function renderStoryModal(app) {
         `<b>Апокалипсис:</b> ${escapeHtml(scenario.apocalypse)}<br><br>` +
         `<b>Бункер:</b> ${escapeHtml(scenario.bunkerDesc)}` +
         `<br><span class="story-meta">${escapeHtml(scenario.bunkerSize)}</span>` +
+        (scenario.plannedStay ? `<br><span class="planned-stay">🕰️ Планируемое время в бункере: <b>${escapeHtml(scenario.plannedStay)}</b></span>` : '') +
         `<br><br><b>Стартовые параметры:</b><div class="resources-bar">${resourceChips(state.baseResources, state.baseStability)}</div>` +
         `<p class="hint">Параметры не меняются до финала. Итог зависит от прошедших игроков и открытых комнат.</p>`;
 
@@ -694,15 +745,15 @@ export function renderStoryModal(app) {
         if (status === 'open') {
             note = '<div class="room-note ok">Доступна. Содержимое учитывается в финале.</div>';
         } else if (!room.hasOpenerEver) {
-            note = '<div class="room-warning">⚠️ В игре нет специалиста, способного открыть эту комнату.</div>';
+            note = '<div class="room-warning">⚠️ В игре нет игрока, способного открыть эту комнату — ни по профессии, ни по навыку, ни по факту.</div>';
         } else if (!room.hasOpenerAlive) {
-            note = '<div class="room-warning">⚠️ Специалист был, но его изгнали — комната не откроется.</div>';
+            note = '<div class="room-warning">⚠️ Подходящий игрок был, но его изгнали — комната не откроется.</div>';
         } else if (state.phase === 'ended') {
             note = room.openAtEnd
-                ? '<div class="room-note ok">Открыта: специалист прошёл в бункер.</div>'
-                : '<div class="room-note bad">Закрыта: специалист не прошёл в бункер.</div>';
+                ? '<div class="room-note ok">Открыта: подходящий игрок прошёл в бункер.</div>'
+                : '<div class="room-note bad">Закрыта: подходящий игрок не прошёл в бункер.</div>';
         } else {
-            note = '<div class="room-note">Специалист в игре есть. Комната откроется в финале, если он пройдёт в бункер.</div>';
+            note = '<div class="room-note">В игре есть игрок, способный открыть комнату по профессии, навыку или факту. Она откроется в финале, если он пройдёт в бункер.</div>';
         }
 
         return `<div class="room-card ${escapeHtml(status)}">

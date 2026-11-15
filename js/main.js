@@ -12,7 +12,7 @@ import { RoomService, isCodeFree } from './net/room-service.js';
 import { HostController } from './net/host-controller.js';
 import { generateRoomCode, normalizeCode, toArray } from './utils.js';
 import {
-    $, showScreen, toast, setConnectionPill, initModalHandlers, closeAllModals, setButtonBusy
+    $, showScreen, toast, queueToast, setConnectionPill, initModalHandlers, closeAllModals, setButtonBusy
 } from './ui/dom.js';
 import { initHome, prefillJoin, fillLobbyScenarioSelect } from './ui/home.js';
 import { initLobby, renderLobby, resetLobbyForm } from './ui/lobby.js';
@@ -40,6 +40,8 @@ const app = {
     leaving: false,
     expectMemberRemoval: false,
     hostLockRelease: null,
+    lastLogId: null,
+    logStartedAt: null,
 
     async sendCommand(type, payload = {}) {
         if (!this.service) throw new Error('Нет активной комнаты.');
@@ -411,6 +413,8 @@ async function cleanupRoom({ keepUrl = false, keepMembership = false, silent = f
     app.lastRendered = null;
     app.lobbyCount = 0;
     app.expectMemberRemoval = false;
+    app.lastLogId = null;
+    app.logStartedAt = null;
 
     if (!keepUrl) clearRoomFromUrl();
     if (!silent) closeAllModals();
@@ -491,7 +495,38 @@ function onMyMembership(member) {
 function onState(state) {
     if (app.leaving || app.expectMemberRemoval) return;
     app.state = normalizePublicState(state);
+    notifyImportantLogs(app.state);
     route();
+}
+
+// Важные события приходят через общий журнал. Показываем всплывающее
+// уведомление только для новых записей; при первом подключении и после
+// перезапуска партии старые записи не спамят игрока.
+function notifyImportantLogs(state) {
+    if (!state) return;
+
+    const entries = toArray(state.log);
+    const maxId = entries.reduce((max, entry) => Math.max(max, Number(entry.id) || 0), 0);
+    const startedAt = state.startedAt || 0;
+
+    if (app.logStartedAt !== startedAt) {
+        app.logStartedAt = startedAt;
+        app.lastLogId = maxId;
+        return;
+    }
+
+    if (app.lastLogId == null) {
+        app.lastLogId = maxId;
+        return;
+    }
+
+    const fresh = entries.filter(entry =>
+        Number(entry.id) > app.lastLogId &&
+        (entry.type === 'room' || entry.type === 'condition')
+    );
+    app.lastLogId = Math.max(app.lastLogId, maxId);
+
+    fresh.forEach(entry => queueToast(entry.text, 'info', 7000));
 }
 
 // Realtime Database может вернуть массив как объект с числовыми ключами

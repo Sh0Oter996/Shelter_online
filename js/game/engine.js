@@ -217,10 +217,24 @@ function normalizePlayer(raw) {
 //  Раздача карт
 // ---------------------------------------------------------------------------
 
+function roomUnlockFacts(room) {
+    const unlock = room && room.unlock ? room.unlock : {};
+    return [...new Set([
+        ...(unlock.facts || []),
+        ...(unlock.fact1 || []),
+        ...(unlock.fact2 || [])
+    ])];
+}
+
 function canOpenRoomForGuarantee(room, player) {
-    const professions = (room.unlock && room.unlock.professions) || [];
-    const skills = (room.unlock && room.unlock.skills) || [];
-    return professions.includes(player.profession) || skills.includes(player.skill);
+    const unlock = room.unlock || {};
+    const professions = unlock.professions || [];
+    const skills = unlock.skills || [];
+    const facts = roomUnlockFacts(room);
+    return professions.includes(player.profession) ||
+        skills.includes(player.skill) ||
+        facts.includes(player.fact1) ||
+        facts.includes(player.fact2);
 }
 
 function ensureRoomOpeners(list, scenario) {
@@ -241,10 +255,21 @@ function ensureRoomOpeners(list, scenario) {
         if (candidates.length === 0) return;
 
         const chosen = randomItem(candidates);
-        const professions = (room.unlock.professions || []);
-        const skills = (room.unlock.skills || []);
-        if (professions.length > 0) chosen.profession = randomItem(professions);
-        else if (skills.length > 0) chosen.skill = randomItem(skills);
+        const options = [
+            ...(room.unlock.professions || []).map(value => ({ field: 'profession', value })),
+            ...(room.unlock.skills || []).map(value => ({ field: 'skill', value })),
+            ...roomUnlockFacts(room).map(value => ({ field: 'fact', value }))
+        ];
+        if (options.length === 0) return;
+
+        const option = randomItem(options);
+        if (option.field === 'profession') {
+            chosen.profession = option.value;
+        } else if (option.field === 'skill') {
+            chosen.skill = option.value;
+        } else {
+            chosen[Math.random() < 0.5 ? 'fact1' : 'fact2'] = option.value;
+        }
     });
 }
 
@@ -587,7 +612,53 @@ export function canPlayerOpenRoom(room, player) {
     if (!room.unlock) return false;
     const professions = room.unlock.professions || [];
     const skills = room.unlock.skills || [];
-    return professions.includes(player.profession) || skills.includes(player.skill);
+    const facts = roomUnlockFacts(room);
+    return professions.includes(player.profession) ||
+        skills.includes(player.skill) ||
+        facts.includes(player.fact1) ||
+        facts.includes(player.fact2);
+}
+
+function roomAbilityMatches(room, player) {
+    const unlock = room.unlock || {};
+    const facts = roomUnlockFacts(room);
+    const matches = [];
+
+    if ((unlock.professions || []).includes(player.profession)) {
+        matches.push({ field: 'profession', label: 'Профессия', value: player.profession });
+    }
+    if ((unlock.skills || []).includes(player.skill)) {
+        matches.push({ field: 'skill', label: 'Навык', value: player.skill });
+    }
+    if (facts.includes(player.fact1)) {
+        matches.push({ field: 'fact1', label: 'Факт 1', value: player.fact1 });
+    }
+    if (facts.includes(player.fact2) && player.fact2 !== player.fact1) {
+        matches.push({ field: 'fact2', label: 'Факт 2', value: player.fact2 });
+    }
+
+    return matches;
+}
+
+function describeRoomUnlock(room) {
+    if (!room || !room.unlock) return 'нужен особый доступ';
+
+    const unlock = room.unlock;
+    const parts = [];
+
+    if ((unlock.professions || []).length > 0) {
+        parts.push(`профессии: ${unlock.professions.map(value => `«${value}»`).join(', ')}`);
+    }
+    if ((unlock.skills || []).length > 0) {
+        parts.push(`навыки: ${unlock.skills.map(value => `«${value}»`).join(', ')}`);
+    }
+    const facts = roomUnlockFacts(room);
+    if (facts.length > 0) {
+        parts.push(`факты: ${facts.map(value => `«${value}»`).join(', ')}`);
+    }
+
+    if (parts.length > 0) return `подойдут ${parts.join('; ')}`;
+    return unlock.text || 'нужен особый доступ';
 }
 
 export function isRoomOpenAtEnd(state, room) {
@@ -611,11 +682,11 @@ function checkRoomEvents(state) {
         if (!room.discoverRound || state.round < room.discoverRound) return;
 
         state.discoveredRoomIds.push(room.id);
-        addLog(state, `🔍 Новое помещение: «${room.name}». ${room.desc}`, 'room');
+        let notification = `🔍 Новое помещение: «${room.name}». ${room.desc}`;
         if (room.locked || room.broken) {
-            const text = room.unlock ? room.unlock.text : 'нужен особый доступ';
-            addLog(state, `Дверь ${room.broken ? 'неисправна' : 'заперта'}: ${text}.`, 'room');
+            notification += ` Дверь ${room.broken ? 'неисправна' : 'заперта'}: ${describeRoomUnlock(room)}.`;
         }
+        addLog(state, notification, 'room');
     });
 }
 
@@ -1619,7 +1690,7 @@ function buildRoomInfo(state, scenario) {
             locked: !!room.locked,
             broken: !!room.broken,
             status,
-            unlockText: room.unlock ? room.unlock.text : 'нужен особый доступ',
+            unlockText: describeRoomUnlock(room),
             hasOpenerEver: state.players.some(p => canPlayerOpenRoom(room, p)),
             hasOpenerAlive: state.players.some(p => p.alive && canPlayerOpenRoom(room, p)),
             openAtEnd: endMode ? isRoomOpenAtEnd(state, room) : false
@@ -1673,6 +1744,7 @@ export function buildPublicState(state) {
             apocalypse: scenario.apocalypse,
             bunkerDesc: scenario.bunkerDesc,
             bunkerSize: scenario.bunkerSize,
+            plannedStay: scenario.plannedStay || '',
             startResources: scenario.startResources || {}
         } : null,
         players: state.players.map(player => publicPlayer(state, player)),
@@ -1708,6 +1780,27 @@ export function buildPublicState(state) {
     };
 }
 
+function playerRoomAbilities(state, player) {
+    if (!player.alive || state.status !== 'playing' || state.phase === 'ended') return [];
+
+    const scenario = getScenario(state.scenarioId);
+    if (!scenario) return [];
+
+    return scenario.rooms
+        .filter(room => (room.locked || room.broken) && isRoomDiscovered(state, room))
+        .map(room => {
+            const matches = roomAbilityMatches(room, player);
+            if (matches.length === 0) return null;
+            return {
+                roomId: room.id,
+                roomName: room.name,
+                action: room.broken ? 'починить' : 'открыть',
+                matches
+            };
+        })
+        .filter(Boolean);
+}
+
 export function buildHand(state, uid) {
     const player = state.players.find(p => p.uid === uid);
     if (!player) return null;
@@ -1721,6 +1814,7 @@ export function buildHand(state, uid) {
             actionCard: getActionCard(player.actionCardId),
             conditionCard: getConditionCard(player.conditionCardId)
         },
+        roomAbilities: playerRoomAbilities(state, player),
         isMyTurn: state.phase === 'reveal' && state.currentUid === uid,
         isMyVote: state.phase === 'vote' && state.currentVoterUid === uid,
         isDecider: state.phase === 'decider' && !player.alive,

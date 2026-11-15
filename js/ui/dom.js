@@ -46,6 +46,8 @@ export function initModalHandlers() {
 }
 
 let toastTimer = null;
+const toastQueue = [];
+let toastQueueTimer = null;
 
 export function toast(message, type = 'info', duration = 4200) {
     const el = $('toast');
@@ -56,6 +58,23 @@ export function toast(message, type = 'info', duration = 4200) {
     toastTimer = setTimeout(() => {
         el.className = 'toast';
     }, duration);
+}
+
+// Важные игровые события могут прийти пачкой (комната + условие).
+// Показываем их по очереди, чтобы одно уведомление не перекрыло другое.
+export function queueToast(message, type = 'info', duration = 6500) {
+    toastQueue.push({ message, type, duration });
+    pumpToastQueue();
+}
+
+function pumpToastQueue() {
+    if (toastQueueTimer || toastQueue.length === 0) return;
+    const item = toastQueue.shift();
+    toast(item.message, item.type, item.duration);
+    toastQueueTimer = setTimeout(() => {
+        toastQueueTimer = null;
+        pumpToastQueue();
+    }, Math.min(item.duration, 6000) + 350);
 }
 
 export function setButtonBusy(button, busy, busyText = 'Подождите…') {
