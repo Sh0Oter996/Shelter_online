@@ -2,19 +2,33 @@
 <html lang="ru">
 <head>
   <meta charset="UTF-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
-  <meta name="theme-color" content="#1a1a2e">
-  <title>Shelter — онлайн</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover, interactive-widget=resizes-content">
+  <meta name="theme-color" content="#0b0f17">
+  <meta name="color-scheme" content="dark">
+  <meta name="description" content="Shelter — онлайн-игра в бункер для компании из 4–15 человек. Создайте комнату, раздайте карты и решите, кто выживет.">
+  <meta name="mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+  <meta name="apple-mobile-web-app-title" content="Shelter">
+  <title>Shelter — игра в бункер</title>
+  <link rel="manifest" href="manifest.webmanifest">
+  <link rel="icon" type="image/png" sizes="32x32" href="icons/favicon-32.png">
+  <link rel="icon" type="image/png" sizes="192x192" href="icons/icon-192.png">
+  <link rel="apple-touch-icon" href="icons/apple-touch-icon.png">
   <link rel="stylesheet" href="styles.css">
 </head>
 <body>
 <noscript>
-  <div class="card" style="margin-top:20px;">Для игры нужен включённый JavaScript.</div>
+  <div class="card noscript-card">Для игры нужен включённый JavaScript.</div>
 </noscript>
+
 <header class="app-header">
   <div class="brand">
-    <h1>🏚️ Shelter</h1>
-    <p>Выживите. Убедите остальных, что вы полезны.</p>
+    <span class="brand-icon" aria-hidden="true">🏚️</span>
+    <div class="brand-text">
+      <h1>Shelter</h1>
+      <p>Выживите. Убедите остальных, что вы полезны.</p>
+    </div>
   </div>
   <div id="connectionPill" class="connection-pill" hidden></div>
 </header>
@@ -49,35 +63,58 @@
 </section>
 
 <!-- ===== ГЛАВНЫЙ ЭКРАН ===== -->
-<section id="homeScreen" class="screen">
+<section id="homeScreen" class="screen home-screen mode-create">
+  <div class="home-hero">
+    <p class="eyebrow">Онлайн-игра на компанию</p>
+    <h2>Соберите команду<br>и переживите апокалипсис</h2>
+    <p class="home-sub">4–15 игроков · один телефон у каждого · партия на 20–40 минут</p>
+  </div>
+
+  <div class="home-tabs" role="tablist" aria-label="Создать комнату или войти">
+    <button type="button" class="home-tab active" role="tab" aria-selected="true" data-home-mode="create">Создать комнату</button>
+    <button type="button" class="home-tab" role="tab" aria-selected="false" data-home-mode="join">Войти по коду</button>
+  </div>
+
   <div class="home-grid">
-    <form id="createForm" class="card" autocomplete="off">
+    <form id="createForm" class="card home-card" autocomplete="off">
       <h2>Создать комнату</h2>
       <label class="field">Ваше имя
-        <input type="text" id="createName" maxlength="20" placeholder="Например, Алиса">
+        <input type="text" id="createName" maxlength="20" placeholder="Например, Алиса" autocomplete="nickname">
       </label>
       <label class="field">Сценарий
         <select id="createScenario"></select>
       </label>
       <p id="createScenarioHint" class="hint"></p>
       <label class="field">Сколько игроков должно выжить
-        <input type="number" id="createSurvivors" min="1" max="14" value="2">
+        <input type="number" id="createSurvivors" min="1" max="14" value="2" inputmode="numeric">
       </label>
       <p class="hint">Число игроков станет известно после входа участников (от 4 до 15). Раунды и квоты голосований рассчитываются автоматически.</p>
-      <button type="submit" id="createBtn">Создать комнату</button>
+      <button type="submit" id="createBtn" class="btn-primary btn-block">Создать комнату</button>
     </form>
 
-    <form id="joinForm" class="card" autocomplete="off">
+    <form id="joinForm" class="card home-card" autocomplete="off">
       <h2>Присоединиться</h2>
       <label class="field">Ваше имя
-        <input type="text" id="joinName" maxlength="20" placeholder="Ваше имя за столом">
+        <input type="text" id="joinName" maxlength="20" placeholder="Ваше имя за столом" autocomplete="nickname">
       </label>
       <label class="field">Код комнаты
-        <input type="text" id="joinCode" inputmode="numeric" maxlength="6" placeholder="6 цифр">
+        <input type="text" id="joinCode" class="code-input" inputmode="numeric" maxlength="6" placeholder="6 цифр" autocomplete="one-time-code">
       </label>
       <p class="hint">Код показывает хост. Можно также открыть ссылку-приглашение — код подставится сам.</p>
-      <button type="submit" id="joinBtn">Войти в комнату</button>
+      <button type="submit" id="joinBtn" class="btn-primary btn-block">Войти в комнату</button>
     </form>
+  </div>
+
+  <div class="install-banner" id="installBanner" role="region" aria-label="Установка приложения Shelter" hidden>
+    <span class="install-icon" aria-hidden="true">📲</span>
+    <div class="install-text">
+      <b>Установить Shelter</b>
+      <span id="installBannerText">Иконка на экране «Домой» и запуск без браузера.</span>
+    </div>
+    <div class="install-actions">
+      <button id="installAppBtn" type="button">Установить</button>
+      <button id="dismissInstallBtn" class="icon-btn ghost" type="button" aria-label="Скрыть">✕</button>
+    </div>
   </div>
 
   <div class="card howto">
@@ -92,30 +129,47 @@
 </section>
 
 <!-- ===== ЛОББИ ===== -->
-<section id="lobbyScreen" class="screen">
-  <div class="card lobby-card">
-    <div class="lobby-top">
-      <div class="lobby-code-block">
-        <span class="muted">Комната</span>
+<section id="lobbyScreen" class="screen lobby-screen">
+  <header class="lobby-top">
+    <div class="lobby-code-block">
+      <span class="muted">Код комнаты</span>
+      <div class="lobby-code-row">
         <span id="lobbyCode" class="room-code">------</span>
-        <button id="copyCodeBtn" class="ghost small-btn" type="button">Копировать код</button>
+        <button id="copyCodeBtn" class="icon-btn" type="button" aria-label="Скопировать код" title="Скопировать код">📋</button>
       </div>
-      <button id="leaveLobbyBtn" class="ghost small-btn danger" type="button">Выйти</button>
     </div>
+    <button id="leaveLobbyBtn" class="icon-btn ghost danger" type="button" aria-label="Выйти из комнаты" title="Выйти">✕</button>
+  </header>
 
-    <div class="invite-row">
-      <input id="inviteLink" type="text" readonly aria-label="Ссылка-приглашение">
-      <button id="copyInviteBtn" class="small-btn" type="button">Копировать ссылку</button>
-    </div>
-    <p id="lobbyModeNote" class="hint"></p>
+  <div class="invite-actions">
+    <button id="shareInviteBtn" class="ghost" type="button">🔗 Пригласить</button>
+    <button id="copyInviteBtn" class="ghost" type="button">📋 Копировать</button>
+  </div>
+  <details class="invite-details">
+    <summary>Ссылка-приглашение</summary>
+    <input id="inviteLink" type="text" readonly aria-label="Ссылка-приглашение">
+  </details>
+  <p id="lobbyModeNote" class="hint"></p>
 
-    <div class="lobby-body">
+  <div class="segmented" id="lobbyTabs" role="tablist" aria-label="Разделы лобби" hidden>
+    <button type="button" class="segmented-btn active" role="tab" aria-selected="true" data-lobby-tab="players">👥 Игроки <span id="lobbyTabCount" class="seg-badge"></span></button>
+    <button type="button" class="segmented-btn" role="tab" aria-selected="false" data-lobby-tab="settings" id="lobbyTabSettings">⚙️ Настройки</button>
+  </div>
+
+  <div class="lobby-panes" id="lobbyPanes">
+    <div class="lobby-pane" data-lobby-pane="players">
       <div class="lobby-players-block">
         <h3>Игроки <span id="lobbyCount" class="muted"></span></h3>
         <div id="lobbyPlayers" class="player-list"></div>
         <p id="lobbyHint" class="hint"></p>
+        <div id="lobbyWait" class="lobby-wait" hidden>
+          <h3>Ждём хоста</h3>
+          <p>Хост настроит сценарий и начнёт игру. Экран обновится автоматически.</p>
+        </div>
       </div>
+    </div>
 
+    <div class="lobby-pane" data-lobby-pane="settings">
       <div id="lobbySettings" class="lobby-settings">
         <h3>Настройки партии</h3>
         <label class="field">Сценарий
@@ -123,7 +177,7 @@
         </label>
         <p id="lobbyScenarioHint" class="hint"></p>
         <label class="field">Сколько игроков должно выжить
-          <input type="number" id="lobbySurvivors" min="1" max="14" value="2">
+          <input type="number" id="lobbySurvivors" min="1" max="14" value="2" inputmode="numeric">
         </label>
 
         <div class="lobby-section">
@@ -162,106 +216,142 @@
           <p class="hint">Для каждого игрока независимо выбирается вариант с заданным весом.</p>
           <div id="lobbyOrientationWeights" class="weight-grid"></div>
         </details>
-
-        <button id="startGameBtn" type="button">Начать игру</button>
-        <p id="startGameHint" class="hint"></p>
-      </div>
-
-      <div id="lobbyWait" class="lobby-wait" hidden>
-        <h3>Ждём хоста</h3>
-        <p>Хост настроит сценарий и начнёт игру. Экран обновится автоматически.</p>
       </div>
     </div>
   </div>
+
+  <footer class="lobby-footer" id="lobbyFooter" hidden>
+    <button id="startGameBtn" class="btn-primary btn-block" type="button">Начать игру</button>
+    <p id="startGameHint" class="hint"></p>
+  </footer>
 </section>
 
 <!-- ===== ИГРА ===== -->
-<section id="gameScreen" class="screen">
-  <div class="card game-topbar">
+<section id="gameScreen" class="screen game-screen">
+  <header class="game-topbar">
     <div class="game-topbar-left">
       <span class="room-code small" id="gameCode">------</span>
       <span id="gameRound" class="game-round"></span>
       <span id="gamePhase" class="phase-badge"></span>
     </div>
-    <div class="game-topbar-actions">
-      <button id="playersBtn" class="small-btn ghost" type="button">👥 Игроки</button>
-      <button id="logBtn" class="small-btn ghost" type="button">📜 Журнал</button>
-      <button id="storyBtn" class="small-btn ghost" type="button">🏠 Бункер</button>
-      <button id="hostRestartBtn" class="small-btn ghost danger" type="button" hidden>🔄 Перезапуск</button>
-      <button id="leaveGameBtn" class="small-btn ghost danger" type="button">Выйти</button>
-    </div>
-  </div>
+    <button id="gameMenuBtn" class="icon-btn" type="button" aria-label="Меню игры" title="Меню игры">⋯</button>
+  </header>
 
   <div id="hostOfflineBanner" class="banner warn" hidden>
     ⏸️ Хост не в сети — игра ждёт его возвращения. Если хост закрыл вкладку, попросите его открыть игру снова по той же ссылке.
   </div>
 
-  <div id="gameNotifications" class="notification-stack" aria-live="polite" hidden></div>
+  <div class="game-panes" id="gamePanes">
+    <section class="game-pane game-pane-turn" data-pane="turn" role="tabpanel" aria-label="Ход">
+      <div id="gamePanels"></div>
+    </section>
 
-  <div class="card bunker-bar" id="gameBunkerBar">
-    <div class="bunker-bar-head">
-      <span><b>Сценарий:</b> <span id="gameScenarioTitle">—</span></span>
-      <span id="gameBunkerMeta" class="muted"></span>
-    </div>
-    <div id="gameResources" class="resources-bar"></div>
+    <section class="game-pane" data-pane="players" role="tabpanel" aria-label="Игроки">
+      <div class="pane-head">
+        <h2>👥 Игроки</h2>
+        <span id="playersAliveMeta" class="muted"></span>
+      </div>
+      <p class="hint">У живых игроков видны только раскрытые характеристики. У изгнанных раскрываются все.</p>
+      <div id="playersModalContent"></div>
+    </section>
+
+    <section class="game-pane" data-pane="bunker" role="tabpanel" aria-label="Бункер">
+      <div class="card story-card" id="gameBunkerBar">
+        <h2 id="storyTitle">Бункер</h2>
+        <p id="gameBunkerMeta" class="story-meta"></p>
+        <div id="gameResources" class="resources-bar"></div>
+        <details class="story-details">
+          <summary>История и описание бункера</summary>
+          <div id="storyDesc" class="story-desc"></div>
+        </details>
+        <div id="storyRooms" class="story-rooms"></div>
+      </div>
+    </section>
+
+    <section class="game-pane game-pane-log" data-pane="log" role="tabpanel" aria-label="Журнал">
+      <div class="pane-head">
+        <h2>📜 Журнал партии</h2>
+      </div>
+      <div id="gameNotifications" class="notification-stack" hidden></div>
+      <div id="gameLog" class="game-log"></div>
+    </section>
   </div>
 
-  <div id="gamePanels"></div>
+  <nav class="tabbar" id="gameTabbar" role="tablist" aria-label="Разделы игры">
+    <button class="tab-btn active" type="button" role="tab" aria-selected="true" data-tab="turn">
+      <span class="tab-icon" aria-hidden="true">🎯</span>
+      <span class="tab-label">Ход</span>
+      <span class="tab-dot" id="turnTabDot" hidden></span>
+    </button>
+    <button class="tab-btn" type="button" role="tab" aria-selected="false" data-tab="players">
+      <span class="tab-icon" aria-hidden="true">👥</span>
+      <span class="tab-label">Игроки</span>
+      <span class="tab-badge" id="playersTabBadge"></span>
+    </button>
+    <button class="tab-btn" type="button" role="tab" aria-selected="false" data-tab="bunker">
+      <span class="tab-icon" aria-hidden="true">🏠</span>
+      <span class="tab-label">Бункер</span>
+    </button>
+    <button class="tab-btn" type="button" role="tab" aria-selected="false" data-tab="log">
+      <span class="tab-icon" aria-hidden="true">📜</span>
+      <span class="tab-label">Журнал</span>
+      <span class="tab-dot" id="logTabDot" hidden></span>
+    </button>
+  </nav>
 </section>
 
-<!-- ===== МОДАЛКА: ИГРОКИ ===== -->
-<div class="modal-overlay" id="playersModal" data-modal>
-  <div class="modal">
-    <button class="close-btn" data-close="playersModal" type="button">Закрыть ✕</button>
-    <h2>👥 Игроки</h2>
-    <p class="hint">У живых игроков видны только раскрытые характеристики. У изгнанных раскрываются все.</p>
-    <div id="playersModalContent"></div>
+<!-- ===== ШТОРКА: МЕНЮ ИГРЫ ===== -->
+<div class="modal-overlay sheet-overlay" id="gameMenuModal" data-modal>
+  <div class="modal sheet" role="dialog" aria-modal="true" aria-label="Меню игры">
+    <div class="sheet-handle" aria-hidden="true"></div>
+    <h2>Меню игры</h2>
+    <p class="hint">Комната <b id="menuCode">------</b> <span id="menuMode" class="muted"></span></p>
+    <div class="sheet-actions">
+      <button id="copyGameCodeBtn" class="sheet-action" type="button">📋 Скопировать код комнаты</button>
+      <button id="shareGameBtn" class="sheet-action" type="button">🔗 Пригласить друзей</button>
+      <button id="installAppBtnMenu" class="sheet-action" type="button" hidden>📲 Установить приложение</button>
+      <button id="hostRestartBtn" class="sheet-action" type="button" hidden>🔄 Перезапустить игру</button>
+      <button id="leaveGameBtn" class="sheet-action danger" type="button">🚪 Выйти из комнаты</button>
+      <button class="sheet-action ghost" type="button" data-close="gameMenuModal">Закрыть</button>
+    </div>
   </div>
 </div>
 
-<!-- ===== МОДАЛКА: ЖУРНАЛ ===== -->
-<div class="modal-overlay" id="logModal" data-modal>
-  <div class="modal">
-    <button class="close-btn" data-close="logModal" type="button">Закрыть ✕</button>
-    <h2>📜 Журнал партии</h2>
-    <div id="gameLog" class="modal-log-content"></div>
-  </div>
-</div>
-
-<!-- ===== МОДАЛКА: БУНКЕР ===== -->
-<div class="modal-overlay" id="storyModal" data-modal>
-  <div class="modal story-modal">
-    <button class="close-btn" data-close="storyModal" type="button">Закрыть ✕</button>
-    <h2 id="storyTitle">Бункер</h2>
-    <div id="storyDesc" class="story-desc"></div>
-    <div id="storyRooms" class="story-rooms"></div>
-  </div>
-</div>
-
-<!-- ===== МОДАЛКА: КАРТА ДЕЙСТВИЯ ===== -->
-<div class="modal-overlay" id="actionModal" data-modal>
-  <div class="modal action-modal">
-    <button class="close-btn" data-close="actionModal" type="button">Отмена ✕</button>
+<!-- ===== ШТОРКА: КАРТА ДЕЙСТВИЯ ===== -->
+<div class="modal-overlay sheet-overlay" id="actionModal" data-modal>
+  <div class="modal sheet action-modal" role="dialog" aria-modal="true" aria-labelledby="actionModalTitle">
+    <div class="sheet-handle" aria-hidden="true"></div>
     <h2 id="actionModalTitle">Карта действия</h2>
     <p class="hint" id="actionModalDesc"></p>
     <div id="actionModalBody"></div>
     <div class="action-modal-footer">
-      <button id="applyActionBtn" type="button">Применить</button>
-      <button id="cancelActionBtn" class="ghost" type="button">Отмена</button>
+      <button id="applyActionBtn" class="btn-primary btn-block" type="button">Применить</button>
+      <button id="cancelActionBtn" class="ghost btn-block" type="button">Отмена</button>
     </div>
   </div>
 </div>
 
-<!-- ===== МОДАЛКА: ПЕРЕЗАПУСК ===== -->
-<div class="modal-overlay" id="restartModal" data-modal>
-  <div class="modal">
-    <button class="close-btn" data-close="restartModal" type="button">Закрыть ✕</button>
-    <h2>🔄 Перезапустить игру?</h2>
+<!-- ===== ШТОРКА: ПЕРЕЗАПУСК ===== -->
+<div class="modal-overlay sheet-overlay" id="restartModal" data-modal>
+  <div class="modal sheet" role="dialog" aria-modal="true" aria-labelledby="restartTitle">
+    <div class="sheet-handle" aria-hidden="true"></div>
+    <h2 id="restartTitle">🔄 Перезапустить игру?</h2>
     <p>Текущая партия завершится, все игроки вернутся в лобби этой же комнаты. Карты будут розданы заново.</p>
     <div class="modal-actions">
-      <button id="confirmRestartBtn" class="danger-btn" type="button">Да, перезапустить</button>
-      <button id="cancelRestartBtn" class="ghost" type="button">Отмена</button>
+      <button id="confirmRestartBtn" class="danger-btn btn-block" type="button">Да, перезапустить</button>
+      <button id="cancelRestartBtn" class="ghost btn-block" type="button">Отмена</button>
     </div>
+  </div>
+</div>
+
+<div class="modal-overlay sheet-overlay" id="installHelpModal" data-modal>
+  <div class="modal sheet" role="dialog" aria-modal="true" aria-labelledby="installHelpTitle">
+    <div class="sheet-handle" aria-hidden="true"></div>
+    <h2 id="installHelpTitle">📲 Установить Shelter</h2>
+    <p id="installHelpIntro">Игра появится на главном экране и будет открываться в отдельном окне — без адресной строки.</p>
+    <ol class="install-steps" id="installHelpSteps"></ol>
+    <p class="hint">Если браузер не показывает установку, игру всё равно можно открыть по ссылке и добавить в закладки.</p>
+    <button class="btn-primary btn-block" type="button" data-close="installHelpModal">Понятно</button>
   </div>
 </div>
 

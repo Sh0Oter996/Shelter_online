@@ -43,6 +43,12 @@ export function initHome({ onCreate, onJoin }) {
     fillScenarioSelect($('createScenario'));
     fillScenarioSelect($('lobbyScenario'));
 
+    const homeScreen = $('homeScreen');
+    const modeButtons = Array.from(homeScreen.querySelectorAll('[data-home-mode]'));
+    modeButtons.forEach(button => {
+        button.addEventListener('click', () => setHomeMode(button.dataset.homeMode));
+    });
+
     let savedName = '';
     try { savedName = localStorage.getItem(NAME_KEY) || ''; } catch { /* ignore */ }
 
@@ -50,6 +56,10 @@ export function initHome({ onCreate, onJoin }) {
         $('createName').value = savedName;
         $('joinName').value = savedName;
     }
+
+    // Если открыли ссылку-приглашение, сразу показываем форму входа.
+    const inviteCode = normalizeCode(new URLSearchParams(location.search).get('room') || '');
+    setHomeMode(inviteCode ? 'join' : 'create');
 
     const updateHint = () => scenarioHint($('createScenario'), $('createScenarioHint'));
     $('createScenario').addEventListener('change', updateHint);
@@ -112,9 +122,9 @@ export function initHome({ onCreate, onJoin }) {
         }
     });
 
-    const inviteCode = normalizeCode(new URLSearchParams(location.search).get('room') || '');
-    if (inviteCode) {
-        $('joinCode').value = inviteCode;
+    const inviteCodeFromUrl = normalizeCode(new URLSearchParams(location.search).get('room') || '');
+    if (inviteCodeFromUrl) {
+        $('joinCode').value = inviteCodeFromUrl;
         updateInviteModeNote();
     }
     $('joinCode').addEventListener('input', () => {
@@ -123,6 +133,19 @@ export function initHome({ onCreate, onJoin }) {
     });
 
     return { savedName };
+}
+
+export function setHomeMode(mode) {
+    const screen = $('homeScreen');
+    if (!screen) return;
+    const next = mode === 'join' ? 'join' : 'create';
+    screen.classList.toggle('mode-create', next === 'create');
+    screen.classList.toggle('mode-join', next === 'join');
+    screen.querySelectorAll('[data-home-mode]').forEach(button => {
+        const active = button.dataset.homeMode === next;
+        button.classList.toggle('active', active);
+        button.setAttribute('aria-selected', active ? 'true' : 'false');
+    });
 }
 
 function updateInviteModeNote() {
@@ -138,9 +161,13 @@ function rememberName(name) {
 }
 
 export function prefillJoin(code) {
-    if (!code) return;
+    const clean = normalizeCode(code || '');
+    if (!clean) return;
     const input = $('joinCode');
-    if (input) input.value = normalizeCode(code);
+    if (input) {
+        input.value = clean;
+        setHomeMode('join');
+    }
 }
 
 export function fillLobbyScenarioSelect() {

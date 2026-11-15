@@ -7,12 +7,15 @@ import {
     DEFAULT_GENERATION
 } from '../config.js';
 import { computeVotePlan, parseManualVotePlan } from '../game/engine.js';
-import { $, toast, escapeHtml, isOnline } from './dom.js';
+import { $, toast, escapeHtml, isOnline, copyText, shareLink } from './dom.js';
 
 let handlers = null;
 let eventsBound = false;
 let formInitializedFor = null;
 let renderedQuotaRoundsKey = null;
+let currentLobbyTab = 'players';
+
+const LOBBY_TABS = ['players', 'settings'];
 
 export function initLobby(options) {
     handlers = options;
@@ -62,14 +65,16 @@ export function initLobby(options) {
         if (handlers && handlers.onLeave) handlers.onLeave();
     });
 
-    $('copyCodeBtn').addEventListener('click', () => {
+    $('copyCodeBtn').addEventListener('click', async () => {
         if (!handlers) return;
-        copyText(handlers.getCode()).then(() => toast('Код комнаты скопирован.', 'success'));
+        const ok = await copyText(handlers.getCode());
+        toast(ok ? 'Код комнаты скопирован.' : 'Не удалось скопировать код.', ok ? 'success' : 'error');
     });
 
-    $('copyInviteBtn').addEventListener('click', () => {
+    $('copyInviteBtn').addEventListener('click', async () => {
         if (!handlers) return;
-        copyText(handlers.getInviteLink()).then(() => toast('Ссылка-приглашение скопирована.', 'success'));
+        const ok = await copyText(handlers.getInviteLink());
+        toast(ok ? 'Ссылка-приглашение скопирована.' : 'Не удалось скопировать ссылку.', ok ? 'success' : 'error');
     });
 
     $('lobbyPlayers').addEventListener('click', event => {
@@ -77,6 +82,99 @@ export function initLobby(options) {
         if (!button || !handlers || !handlers.onKick) return;
         handlers.onKick(button.dataset.kick);
     });
+
+    // --- вкладки лобби: свайп и сегментированное переключение ---
+    $('lobbyTabs').addEventListener('click', event => {
+        const button = event.target.closest('[data-lobby-tab]');
+        if (!button || button.hidden) return;
+        setLobbyTab(button.dataset.lobbyTab, true);
+    });
+
+    let scrollFrame = null;
+    $('lobbyPanes').addEventListener('scroll', () => {
+        if (scrollFrame) return;
+        scrollFrame = requestAnimationFrame(() => {
+            scrollFrame = null;
+            syncLobbyTabFromScroll();
+        });
+    }, { passive: true });
+
+    let resizeFrame = null;
+    window.addEventListener('resize', () => {
+        if (document.body.dataset.screen !== 'lobbyScreen') return;
+        if (resizeFrame) return;
+        resizeFrame = requestAnimationFrame(() => {
+            resizeFrame = null;
+            const panes = $('lobbyPanes');
+            if (panes) panes.scrollLeft = panes.clientWidth * lobbyTabIndex(currentLobbyTab);
+        });
+    });
+
+    $('shareInviteBtn').addEventListener('click', async () => {
+        if (!handlers) return;
+        const result = await shareLink({
+            title: 'Shelter — игра в бункер',
+            text: `Присоединяйтесь к комнате ${handlers.getCode()}`,
+            url: handlers.getInviteLink()
+        });
+        if (result === 'copied') toast('Ссылка скопирована — отправьте её друзьям.', 'success');
+        else if (result === 'failed') toast('Не удалось скопировать ссылку.', 'error');
+    });
+}
+
+function lobbyTabButtons() {
+    return Array.from(document.querySelectorAll('[data-lobby-tab]'));
+}
+
+function lobbyTabIndex(tab) {
+    const buttons = lobbyTabButtons();
+    const index = buttons.findIndex(button => button.dataset.lobbyTab === tab);
+    return index >= 0 ? index : 0;
+}
+
+export function setLobbyTab(tab, user = false) {
+    if (!LOBBY_TABS.includes(tab)) return;
+    if (tab === 'settings' && $('lobbyTabSettings').hidden) tab = 'players';
+    currentLobbyTab = tab;
+
+    const panes = $('lobbyPanes');
+    if (panes) {
+        const left = panes.clientWidth * lobbyTabIndex(tab);
+        if (Math.abs(panes.scrollLeft - left) > 2) {
+            panes.scrollTo({ left, behavior: 'auto' });
+        }
+    }
+
+    lobbyTabButtons().forEach(button => {
+        const active = button.dataset.lobbyTab === tab;
+        button.classList.toggle('active', active);
+        button.setAttribute('aria-selected', active ? 'true' : 'false');
+    });
+}
+
+function syncLobbyTabFromScroll() {
+    const panes = $('lobbyPanes');
+    if (!panes || !panes.clientWidth) return;
+    const index = Math.round(panes.scrollLeft / panes.clientWidth);
+    const button = lobbyTabButtons()[index];
+    if (!button) return;
+    const tab = button.dataset.lobbyTab;
+    if (!LOBBY_TABS.includes(tab) || tab === currentLobbyTab) return;
+    if (button.hidden) return;
+    currentLobbyTab = tab;
+    lobbyTabButtons().forEach(item => {
+        const active = item.dataset.lobbyTab === tab;
+        item.classList.toggle('active', active);
+        item.setAttribute('aria-selected', active ? 'true' : 'false');
+    });
+}
+
+// Вызывается при каждом входе на экран лобби: показываем список игроков,
+// но не сбрасываем введённые настройки.
+export function resetLobbyView() {
+    setLobbyTab('players');
+    const panes = $('lobbyPanes');
+    if (panes) panes.scrollLeft = 0;
 }
 
 export function resetLobbyForm() {
@@ -341,6 +439,7 @@ export function renderLobby(app) {
     }).join('');
 
     $('lobbyCount').textContent = `${count} / 15`;
+    $('lobbyTabCount').textContent = String(count);
 
     const modeNote = $('lobbyModeNote');
     if (app.mode === 'local') {
@@ -355,6 +454,14 @@ export function renderLobby(app) {
     const wait = $('lobbyWait');
     settings.hidden = !isHost;
     wait.hidden = isHost;
+
+    // Настройки — отдельная вкладка, доступная только хосту.
+    const settingsPane = document.querySelector('[data-lobby-pane="settings"]');
+    if (settingsPane) settingsPane.hidden = !isHost;
+    $('lobbyTabs').hidden = !isHost;
+    $('lobbyTabSettings').hidden = !isHost;
+    $('lobbyFooter').hidden = !isHost;
+    if (!isHost && currentLobbyTab !== 'players') setLobbyTab('players');
 
     if (isHost) {
         const key = `${code}`;
@@ -388,21 +495,5 @@ export function renderLobby(app) {
             <p>${hostMember ? `Хост <b>${escapeHtml(hostMember.name)}</b>` : 'Хост'} настраивает сценарий и начнёт игру. Экран обновится автоматически.</p>
             <p class="hint">Сейчас в комнате ${count} игрок(ов). Нужно от 4 до 15.</p>`;
         $('lobbyHint').textContent = '';
-    }
-}
-
-async function copyText(text) {
-    const value = String(text || '');
-    if (!value) return;
-    try {
-        await navigator.clipboard.writeText(value);
-    } catch {
-        const input = document.createElement('textarea');
-        input.value = value;
-        input.style.position = 'fixed';
-        input.style.opacity = '0';
-        document.body.appendChild(input);
-        input.select();
-        try { document.execCommand('copy'); } finally { input.remove(); }
     }
 }

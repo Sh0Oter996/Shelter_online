@@ -10,6 +10,9 @@ export function showScreen(id) {
     document.querySelectorAll('.screen').forEach(screen => {
         screen.classList.toggle('active', screen.id === id);
     });
+    // По этому атрибуту CSS понимает, что открыт полноэкранный раздел:
+    // прячет общую шапку, фиксирует прокрутку и поднимает тосты над меню.
+    if (id) document.body.dataset.screen = id;
     window.scrollTo(0, 0);
 }
 
@@ -92,12 +95,13 @@ export function setButtonBusy(button, busy, busyText = 'Подождите…') 
     }
 }
 
-export function setConnectionPill(mode, label) {
+export function setConnectionPill(mode, label, title = '') {
     const el = $('connectionPill');
     if (!el) return;
     el.hidden = false;
     el.className = `connection-pill ${mode}`;
     el.textContent = label;
+    el.title = title || label;
 }
 
 export function isOnline(presenceEntry, maxAgeMs = 90000) {
@@ -124,4 +128,48 @@ export function phaseLabel(phase) {
 
 export function confirmAction(message) {
     return window.confirm(message);
+}
+
+// Копирование работает и в защищённом контексте (https/localhost), и на
+// обычном http: сначала Clipboard API, затем скрытая textarea.
+export async function copyText(text) {
+    const value = String(text || '');
+    if (!value) return false;
+    try {
+        if (navigator.clipboard && window.isSecureContext) {
+            await navigator.clipboard.writeText(value);
+            return true;
+        }
+    } catch { /* переходим к запасному способу */ }
+
+    try {
+        const input = document.createElement('textarea');
+        input.value = value;
+        input.setAttribute('readonly', '');
+        input.style.position = 'fixed';
+        input.style.top = '-1000px';
+        input.style.opacity = '0';
+        document.body.appendChild(input);
+        input.select();
+        input.setSelectionRange(0, value.length);
+        const ok = document.execCommand('copy');
+        input.remove();
+        return ok;
+    } catch {
+        return false;
+    }
+}
+
+// Поделиться ссылкой через системное меню телефона, иначе — копирование.
+export async function shareLink({ title, text, url }) {
+    if (navigator.share) {
+        try {
+            await navigator.share({ title, text, url });
+            return 'shared';
+        } catch (error) {
+            if (error && error.name === 'AbortError') return 'cancelled';
+        }
+    }
+    const ok = await copyText(url);
+    return ok ? 'copied' : 'failed';
 }

@@ -15,8 +15,9 @@ import {
     $, showScreen, toast, queueToast, setConnectionPill, initModalHandlers, closeAllModals, setButtonBusy
 } from './ui/dom.js';
 import { initHome, prefillJoin, fillLobbyScenarioSelect } from './ui/home.js';
-import { initLobby, renderLobby, resetLobbyForm } from './ui/lobby.js';
-import { initGameUI, renderGame } from './ui/game.js';
+import { initLobby, renderLobby, resetLobbyForm, resetLobbyView } from './ui/lobby.js';
+import { initGameUI, renderGame, resetGameView } from './ui/game.js';
+import { initPWA } from './pwa.js';
 
 const ROOM_KEY_PREFIX = 'shelter.room.';
 const LAST_ROOM_KEY = 'shelter.lastRoom';
@@ -77,6 +78,7 @@ if (document.readyState === 'loading') {
 
 async function boot() {
     initModalHandlers();
+    initPWA();
     initHome({
         onCreate: createRoomFlow,
         onJoin: joinRoomFlow
@@ -141,9 +143,10 @@ async function connect(mode) {
         app.uid = backend.uid;
         app.mode = mode;
 
-        setConnectionPill(mode, mode === 'local'
-            ? '🧪 Локальный режим · вкладки'
-            : '☁️ Firebase · онлайн');
+        setConnectionPill(mode, mode === 'local' ? '🧪 Локально' : '☁️ Онлайн',
+            mode === 'local'
+                ? 'Локальный режим: игра работает между вкладками одного браузера'
+                : 'Firebase: игра синхронизируется через интернет');
 
         const resumed = await tryResumeRoom(mode);
         if (!resumed) {
@@ -580,7 +583,11 @@ function route(force = false) {
 
     if (changed || force) {
         showScreen(screen);
-        if (changed) closeAllModals();
+        if (changed) {
+            if (screen === 'lobbyScreen') resetLobbyView();
+            if (screen === 'gameScreen') resetGameView();
+            closeAllModals();
+        }
         app.lastRendered = screen;
     }
 

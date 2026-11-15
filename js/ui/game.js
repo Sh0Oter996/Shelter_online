@@ -2,11 +2,26 @@
 
 import { FIELDS, REVEALABLE_FIELDS, RESOURCE_META, CUSTOM_MARKER } from '../config.js';
 import {
-    $, escapeHtml, openModal, closeModal, toast, phaseLabel, isOnline, isStale
+    $, escapeHtml, openModal, closeModal, toast, copyText, shareLink,
+    phaseLabel, isOnline, isStale
 } from './dom.js';
 import { signed, toArray } from '../utils.js';
 
 let appRef = null;
+
+// ---------------------------------------------------------------------------
+//  Вкладки игрового экрана
+// ---------------------------------------------------------------------------
+
+const GAME_TABS = ['turn', 'players', 'bunker', 'log'];
+let currentTab = 'turn';
+let lastActionKey = '';
+let lastPhase = '';
+let lastLogSeenId = null;
+let scrollSyncLock = 0;
+let scrollSyncTimer = null;
+
+const htmlCache = new WeakMap();
 
 // ---------------------------------------------------------------------------
 //  Инициализация обработчиков
@@ -15,25 +30,81 @@ let appRef = null;
 export function initGameUI(app) {
     appRef = app;
 
-    $('playersBtn').addEventListener('click', () => {
-        renderPlayersModal(appRef);
-        openModal('playersModal');
+    $('gameTabbar').addEventListener('click', event => {
+        const button = event.target.closest('[data-tab]');
+        if (!button) return;
+        setGameTab(button.dataset.tab, { user: true });
     });
-    $('logBtn').addEventListener('click', () => {
-        renderLog(appRef);
-        openModal('logModal');
+
+    const panes = $('gamePanes');
+    let raf = null;
+    panes.addEventListener('scroll', () => {
+        if (raf) return;
+        raf = requestAnimationFrame(() => {
+            raf = null;
+            if (Date.now() < scrollSyncLock) return;
+            syncTabFromScroll();
+        });
+    }, { passive: true });
+
+    // При повороте телефона или изменении ширины окна разделы должны
+    // остаться выровненными по активной вкладке.
+    let resizeRaf = null;
+    window.addEventListener('resize', () => {
+        if (document.body.dataset.screen !== 'gameScreen') return;
+        if (resizeRaf) return;
+        resizeRaf = requestAnimationFrame(() => {
+            resizeRaf = null;
+            const box = $('gamePanes');
+            if (box) box.scrollLeft = box.clientWidth * GAME_TABS.indexOf(currentTab);
+        });
     });
-    $('storyBtn').addEventListener('click', () => {
-        renderStoryModal(appRef);
-        openModal('storyModal');
+
+    document.addEventListener('keydown', event => {
+        if (document.body.dataset.screen !== 'gameScreen') return;
+        if (document.querySelector('.modal-overlay.open')) return;
+        if (event.defaultPrevented || event.altKey || event.ctrlKey || event.metaKey) return;
+        const tag = (event.target && event.target.tagName || '').toLowerCase();
+        if (tag === 'input' || tag === 'select' || tag === 'textarea') return;
+        if (event.key !== 'ArrowLeft' && event.key !== 'ArrowRight') return;
+        const index = GAME_TABS.indexOf(currentTab);
+        const next = event.key === 'ArrowRight'
+            ? Math.min(GAME_TABS.length - 1, index + 1)
+            : Math.max(0, index - 1);
+        if (next === index) return;
+        event.preventDefault();
+        setGameTab(GAME_TABS[next], { user: true });
     });
+
+    $('gameMenuBtn').addEventListener('click', () => {
+        if (appRef && appRef.code) $('menuCode').textContent = appRef.code;
+        openModal('gameMenuModal');
+    });
+    $('copyGameCodeBtn').addEventListener('click', async () => {
+        const ok = await copyText(appRef && appRef.code);
+        toast(ok ? 'Код комнаты скопирован.' : 'Не удалось скопировать код.', ok ? 'success' : 'error');
+    });
+    $('shareGameBtn').addEventListener('click', async () => {
+        if (!appRef) return;
+        const result = await shareLink({
+            title: 'Shelter — игра в бункер',
+            text: `Присоединяйтесь к комнате ${appRef.code}`,
+            url: appRef.buildInviteLink()
+        });
+        if (result === 'copied') toast('Ссылка скопирована — отправьте её друзьям.', 'success');
+        else if (result === 'failed') toast('Не удалось скопировать ссылку.', 'error');
+    });
+
     $('leaveGameBtn').addEventListener('click', () => {
+        if (!appRef) return;
         if (confirm('Выйти из комнаты? Партия продолжится без вас; вернуться можно по ссылке-приглашению.')) {
+            closeModal('gameMenuModal');
             appRef.leaveRoom();
         }
     });
 
     $('hostRestartBtn').addEventListener('click', () => {
+        closeModal('gameMenuModal');
         openModal('restartModal');
     });
 
@@ -57,6 +128,152 @@ function send(app, type, payload = {}) {
 }
 
 // ---------------------------------------------------------------------------
+//  Вкладки: переключение и свайп
+// ---------------------------------------------------------------------------
+
+export function setGameTab(tab, { user = false } = {}) {
+    if (!GAME_TABS.includes(tab)) return;
+    currentTab = tab;
+
+    const panes = $('gamePanes');
+    if (panes && panes.clientWidth) {
+        const left = panes.clientWidth * GAME_TABS.indexOf(tab);
+        if (Math.abs(panes.scrollLeft - left) > 2) {
+            scrollSyncLock = Date.now() + 140;
+            if (scrollSyncTimer) clearTimeout(scrollSyncTimer);
+            scrollSyncTimer = setTimeout(() => {
+                scrollSyncTimer = null;
+                scrollSyncLock = 0;
+                syncTabFromScroll();
+            }, 180);
+            // Всегда мгновенно: плавная прокрутка в фоновой вкладке может
+            // «зависнуть» на середине и показать два раздела одновременно.
+            panes.scrollTo({ left, behavior: 'auto' });
+        }
+    }
+
+    updateTabbar();
+    updateLogDot();
+    if (tab === 'log') {
+        markLogSeen();
+        scrollLogToBottom();
+    }
+}
+
+function syncTabFromScroll() {
+    const panes = $('gamePanes');
+    if (!panes || !panes.clientWidth) return;
+    const index = Math.round(panes.scrollLeft / panes.clientWidth);
+    const tab = GAME_TABS[index];
+    if (!tab || tab === currentTab) return;
+    currentTab = tab;
+    updateTabbar();
+    updateLogDot();
+    if (tab === 'log') {
+        markLogSeen();
+        scrollLogToBottom();
+    }
+}
+
+function updateTabbar() {
+    document.querySelectorAll('#gameTabbar [data-tab]').forEach(button => {
+        const active = button.dataset.tab === currentTab;
+        button.classList.toggle('active', active);
+        button.setAttribute('aria-selected', active ? 'true' : 'false');
+    });
+    updateActionAttention();
+}
+
+function updateActionAttention() {
+    const needs = Boolean(lastActionKey);
+    const dot = $('turnTabDot');
+    if (dot) dot.hidden = !needs || currentTab === 'turn';
+    const turnButton = document.querySelector('#gameTabbar [data-tab="turn"]');
+    if (turnButton) turnButton.classList.toggle('attention', needs && currentTab !== 'turn');
+}
+
+function markLogSeen() {
+    const log = appRef && appRef.state ? toArray(appRef.state.log) : [];
+    const maxId = log.reduce((max, entry) => Math.max(max, Number(entry.id) || 0), 0);
+    lastLogSeenId = maxId;
+    const dot = $('logTabDot');
+    if (dot) dot.hidden = true;
+}
+
+function updateLogDot() {
+    const dot = $('logTabDot');
+    if (!dot) return;
+    if (currentTab === 'log') {
+        dot.hidden = true;
+        return;
+    }
+    const log = appRef && appRef.state ? toArray(appRef.state.log) : [];
+    const maxId = log.reduce((max, entry) => Math.max(max, Number(entry.id) || 0), 0);
+    dot.hidden = lastLogSeenId == null || maxId <= lastLogSeenId;
+}
+
+function scrollLogToBottom() {
+    const box = $('gameLog');
+    if (!box) return;
+    box.scrollTop = box.scrollHeight;
+}
+
+// Вызывается при входе на игровой экран.
+export function resetGameView() {
+    lastActionKey = '';
+    lastPhase = '';
+    lastLogSeenId = null;
+    scrollSyncLock = 0;
+    if (scrollSyncTimer) {
+        clearTimeout(scrollSyncTimer);
+        scrollSyncTimer = null;
+    }
+    currentTab = 'turn';
+
+    // Не показываем содержимое прошлой комнаты, пока не пришли новые данные.
+    ['gamePanels', 'playersModalContent', 'gameLog', 'storyDesc', 'storyRooms'].forEach(id => {
+        const el = $(id);
+        if (!el) return;
+        el.innerHTML = '';
+        htmlCache.set(el, '');
+    });
+    if ($('storyTitle')) $('storyTitle').textContent = 'Бункер';
+    const storyDetails = document.querySelector('.story-details');
+    if (storyDetails) storyDetails.open = false;
+    if ($('playersTabBadge')) $('playersTabBadge').textContent = '';
+    if ($('playersAliveMeta')) $('playersAliveMeta').textContent = '';
+    if ($('gameNotifications')) {
+        $('gameNotifications').hidden = true;
+        $('gameNotifications').innerHTML = '';
+    }
+
+    const panes = $('gamePanes');
+    if (panes) {
+        panes.scrollLeft = 0;
+        panes.querySelectorAll('.game-pane').forEach(pane => { pane.scrollTop = 0; });
+    }
+    document.querySelectorAll('#gameTabbar [data-tab]').forEach(button => {
+        const active = button.dataset.tab === 'turn';
+        button.classList.toggle('active', active);
+        button.setAttribute('aria-selected', active ? 'true' : 'false');
+        button.classList.remove('attention');
+    });
+    ['turnTabDot', 'logTabDot'].forEach(id => { if ($(id)) $(id).hidden = true; });
+
+    // Один раз подсказываем про свайпы — дальше игрок уже знает.
+    try {
+        if (!localStorage.getItem('shelter.swipeHintShown')) {
+            localStorage.setItem('shelter.swipeHintShown', '1');
+            setTimeout(() => {
+                if (document.body.dataset.screen === 'gameScreen') {
+                    toast('Свайпайте между разделами или используйте меню внизу.', 'info', 5000);
+                }
+            }, 900);
+        }
+    } catch { /* localStorage может быть недоступен */ }
+}
+
+// ---------------------------------------------------------------------------
 //  Основной рендер
 // ---------------------------------------------------------------------------
 
@@ -65,6 +282,10 @@ export function renderGame(app) {
     if (!app.meta) return;
 
     $('gameCode').textContent = app.code;
+    if ($('menuCode')) $('menuCode').textContent = app.code;
+    if ($('menuMode')) {
+        $('menuMode').textContent = app.mode === 'local' ? '· 🧪 локальный режим' : '· ☁️ онлайн';
+    }
     $('gameRound').textContent = app.state && app.state.status === 'playing'
         ? `Раунд ${app.state.round}`
         : '';
@@ -81,23 +302,37 @@ export function renderGame(app) {
     renderHostBanner(app);
     renderGameNotifications(app);
 
-    const panels = $('gamePanels');
     if (!app.state) {
-        panels.innerHTML = `<div class="card loading-card"><div class="spinner"></div><p>Синхронизируем состояние партии…</p></div>`;
+        setPaneHtml($('gamePanels'), `<div class="card loading-card"><div class="spinner"></div><p>Синхронизируем состояние партии…</p></div>`);
+        setPaneHtml($('playersModalContent'), '');
+        setPaneHtml($('gameLog'), '');
+        $('storyTitle').textContent = 'Бункер';
+        $('storyDesc').innerHTML = '';
+        $('storyRooms').innerHTML = '';
         return;
     }
 
-    panels.innerHTML = buildPanels(app);
+    setPaneHtml($('gamePanels'), buildPanels(app));
+    renderPlayersContent(app);
+    renderStoryContent(app);
+    renderLog(app);
+    renderTabBadges(app);
+    reactToPhase(app);
+}
 
-    if ($('playersModal').classList.contains('open')) renderPlayersModal(app);
-    if ($('logModal').classList.contains('open')) renderLog(app);
-    if ($('storyModal').classList.contains('open')) renderStoryModal(app);
+function setPaneHtml(container, html) {
+    if (!container) return;
+    if (htmlCache.get(container) === html) return;
+    const pane = container.closest('.game-pane');
+    const paneScroll = pane ? pane.scrollTop : 0;
+    container.innerHTML = html;
+    htmlCache.set(container, html);
+    if (pane) pane.scrollTop = paneScroll;
 }
 
 function renderBunkerBar(app) {
     const state = app.state;
     const scenario = state && state.scenario;
-    $('gameScenarioTitle').textContent = scenario ? scenario.title : '—';
     $('gameBunkerMeta').textContent = scenario
         ? `${scenario.bunkerSize}${scenario.plannedStay ? ` · Планируемое время: ${scenario.plannedStay}` : ''}`
         : '';
@@ -115,8 +350,7 @@ function renderHostBanner(app) {
         return;
     }
     const hostPresence = app.presence && app.presence[app.meta.hostUid];
-    const online = isOnline(hostPresence);
-    banner.hidden = online;
+    banner.hidden = isOnline(hostPresence);
 }
 
 function renderGameNotifications(app) {
@@ -171,63 +405,114 @@ function buildPanels(app) {
     }
 
     if (state.status === 'ended' || state.phase === 'ended') {
-        return endingPanel(app) + playersStrip(app);
+        return endingPanel(app);
     }
 
+    const status = statusStrip(app);
+
     if (state.phase === 'story') {
-        return storyPanel(app) + playersStrip(app);
+        return status + storyPanel(app);
     }
 
     if (state.phase === 'reveal') {
-        return revealStatusPanel(app) + ownCardPanel(app) + playersStrip(app);
+        return status + revealStatusPanel(app) + ownCardPanel(app);
     }
 
     if (state.phase === 'vote') {
-        return votePanel(app) + ownCardPanel(app, true) + playersStrip(app);
+        return status + votePanel(app) + ownCardPanel(app, true);
     }
 
     if (state.phase === 'vote-result') {
-        return voteResultsPanel(app) + playersStrip(app);
+        return status + voteResultsPanel(app);
     }
 
     if (state.phase === 'decider') {
-        return deciderPanel(app) + ownCardPanel(app, true) + playersStrip(app);
+        return status + deciderPanel(app) + ownCardPanel(app, true);
     }
 
     return `<div class="card"><p>Неизвестная фаза: ${escapeHtml(state.phase)}</p></div>`;
 }
 
-function playersStrip(app) {
+function statusStrip(app) {
     const state = app.state;
-    if (!state) return '';
     const players = toArray(state.players);
-    const chips = players.map(player => {
-        const mine = player.uid === app.uid;
-        const online = isOnline(app.presence && app.presence[player.uid]) || mine;
-        const turn = state.currentUid === player.uid || state.vote.currentVoterUid === player.uid;
-        const classes = [
-            'player-chip',
-            player.alive ? 'alive' : 'eliminated',
-            mine ? 'me' : '',
-            turn ? 'turn' : '',
-            online ? '' : 'offline'
-        ].filter(Boolean).join(' ');
-        return `<span class="${classes}">
-            <span class="online-dot ${online ? 'on' : 'off'}"></span>
-            ${player.alive ? '🟢' : '🔴'}
-            <b>${escapeHtml(player.name)}</b>
-            ${player.isHost ? '<span class="crown" title="хост">👑</span>' : ''}
-            ${mine ? '<span class="badge me">вы</span>' : ''}
-        </span>`;
-    }).join('');
-
-    return `<div class="card players-strip">
-        <div class="players-strip-head">
-            <h3>Игроки</h3>
-            <span class="muted">В бункере: ${state.aliveCount} из ${players.length} · выжить должно: ${state.survivorsTarget}</span>
-        </div>
-        <div class="player-chips">${chips}</div>
+    return `<div class="status-strip">
+        <span class="status-pill">🟢 Живых: <b>${Number(state.aliveCount) || 0}</b> из ${players.length}</span>
+        <span class="status-pill">🎯 Выжить: <b>${Number(state.survivorsTarget) || 0}</b></span>
     </div>`;
+}
+
+function renderTabBadges(app) {
+    const state = app.state;
+    if (!state) return;
+    const players = toArray(state.players);
+    const alive = Number(state.aliveCount) || 0;
+    if ($('playersTabBadge')) $('playersTabBadge').textContent = `${alive}/${players.length}`;
+    if ($('playersAliveMeta')) {
+        $('playersAliveMeta').textContent =
+            `Живых: ${alive} из ${players.length} · выжить должно: ${state.survivorsTarget}`;
+    }
+}
+
+// ---------------------------------------------------------------------------
+//  Реакция на фазу: автоматически показываем игроку нужный экран
+// ---------------------------------------------------------------------------
+
+function currentAction(app) {
+    const state = app.state;
+    const hand = app.hand;
+    const isHost = app.meta && app.meta.hostUid === app.uid;
+    if (!state) return '';
+    if (state.status === 'ended' || state.phase === 'ended') return 'ended';
+    if (!hand) return '';
+    if (state.phase === 'story' && isHost) return 'begin';
+    if (state.phase === 'reveal' && hand.isMyTurn) return 'reveal';
+    if (state.phase === 'vote' && hand.isMyVote) return 'vote';
+    if (state.phase === 'vote-result' && isHost) return 'continue';
+    if (state.phase === 'decider' && hand.isDecider) return 'decider';
+    return '';
+}
+
+const ACTION_MESSAGES = {
+    begin: 'Все изучили историю — начните раунд, когда будете готовы.',
+    reveal: 'Ваш ход: раскройте одну характеристику в карточке.',
+    vote: 'Ваше голосование: выберите, кого изгнать.',
+    'continue': 'Голосование закончено — посмотрите итоги и продолжите.',
+    decider: 'Ваш решающий голос: совещайтесь с выбывшими.',
+    ended: 'Партия завершена — смотрите итоги.'
+};
+
+function reactToPhase(app) {
+    const state = app.state;
+    const phase = state.phase;
+
+    if (phase !== lastPhase) {
+        // Новая фаза — показываем её с начала, а не с позиции прокрутки
+        // предыдущей панели.
+        lastPhase = phase;
+        scrollTurnToTop();
+        if (phase === 'ended') setGameTab('turn');
+    }
+
+    const action = currentAction(app);
+    const changed = action && action !== lastActionKey;
+    lastActionKey = action;
+    updateActionAttention();
+
+    if (changed) {
+        const wasOnTurn = currentTab === 'turn';
+        setGameTab('turn', { user: false });
+        scrollTurnToTop();
+        // Если игрок уже смотрит «Ход», подсказка в панели и так перед глазами.
+        if (!wasOnTurn && ACTION_MESSAGES[action]) {
+            toast(ACTION_MESSAGES[action], 'info', 4500);
+        }
+    }
+}
+
+function scrollTurnToTop() {
+    const pane = document.querySelector('#gamePanes [data-pane="turn"]');
+    if (pane) pane.scrollTop = 0;
 }
 
 // ---------------------------------------------------------------------------
@@ -248,7 +533,7 @@ function storyPanel(app) {
         ${scenario.plannedStay ? `<p class="planned-stay">🕰️ Планируемое время в бункере: <b>${escapeHtml(scenario.plannedStay)}</b></p>` : ''}
         <p><b>Стартовые параметры бункера:</b></p>
         <div class="resources-bar">${resourceChips(state.baseResources, state.baseStability)}</div>
-        <p class="hint">Все игроки изучают историю. Полное описание комнат — в кнопке «🏠 Бункер».</p>
+        <p class="hint">Все игроки изучают историю. Полное описание комнат — во вкладке «Бункер».</p>
         ${isHost
             ? `<button data-action="begin">Войти в бункер и начать раунд 1</button>`
             : `<p class="waiting-note">Ждём, пока хост начнёт раунд.</p>`}
@@ -265,6 +550,26 @@ function displayValue(field, values) {
     if (raw == null || raw === '') return '—';
     if (field.key === 'age') return `${raw} лет`;
     return String(raw);
+}
+
+function avatarHue(name) {
+    let hash = 0;
+    const text = String(name || '?');
+    for (let i = 0; i < text.length; i++) {
+        hash = (hash * 31 + text.codePointAt(i)) % 360;
+    }
+    return hash;
+}
+
+function avatarHtml(name, extraClass = '') {
+    const initial = String(name || '?').trim().charAt(0).toUpperCase() || '?';
+    return `<span class="avatar ${extraClass}" style="--avatar-hue:${avatarHue(name)}" aria-hidden="true">${escapeHtml(initial)}</span>`;
+}
+
+// Длинные значения вроде «Гетеросексуальность» чуть уменьшаем, чтобы они
+// помещались в половину экрана без разрыва посередине слова.
+function valueClass(value) {
+    return String(value == null ? '' : value).length > 15 ? ' long' : '';
 }
 
 function ownCardPanel(app, compact = false) {
@@ -304,13 +609,13 @@ function ownCardPanel(app, compact = false) {
             return `<button type="button" class="trait trait-button ${player[field.key] === CUSTOM_MARKER ? 'custom' : ''}"
                 data-action="reveal" data-key="${field.key}">
                 <span class="label">${escapeHtml(field.label)} · раскрыть</span>
-                <span class="value">${escapeHtml(value)}</span>
+                <span class="value${valueClass(value)}">${escapeHtml(value)}</span>
             </button>`;
         }
 
         return `<div class="trait ${revealed ? 'revealed' : 'unrevealed'}">
             <span class="label">${escapeHtml(field.label)}${revealed ? '' : ' · скрыто от других'}</span>
-            <span class="value">${escapeHtml(value)}</span>
+            <span class="value${valueClass(value)}">${escapeHtml(value)}</span>
         </div>`;
     }).join('');
 
@@ -370,21 +675,20 @@ function ownCardPanel(app, compact = false) {
             ? `<p class="hint strong-hint">Ваш ход: нажмите на одну характеристику, чтобы раскрыть её для всех.</p>`
             : `<p class="hint">Свои значения видите только вы. Сейчас ${state.currentName ? `ходит <b>${escapeHtml(state.currentName)}</b>` : 'идёт голосование'}.</p>`;
 
+    const traitsBlock = `<div class="traits-grid">${traits}</div>`;
+    const secretBlocks = `${actionBlock}${conditionBlock}${bonus}${abilityBlock}`;
+
     return `<div class="card own-card ${compact ? 'compact' : ''}">
         <div class="own-card-head">
-            <h2>Ваша карточка: <span class="player-tag">${escapeHtml(player.name)}</span></h2>
+            <h2>${avatarHtml(player.name)} Ваша карточка: <span class="player-tag">${escapeHtml(player.name)}</span></h2>
             <span class="badge ${alive ? 'alive-badge' : 'dead-badge'}">${alive ? 'в игре' : 'изгнан(а)'}</span>
         </div>
         <div class="base-traits">
-            <div class="trait revealed"><span class="label">Профессия (открыта всем)</span><span class="value">${escapeHtml(profession)}</span></div>
-            <div class="trait revealed"><span class="label">Пол (открыт всем)</span><span class="value">${escapeHtml(sex)}</span></div>
+            <div class="trait revealed"><span class="label">Профессия</span><span class="value${valueClass(profession)}">${escapeHtml(profession)}</span></div>
+            <div class="trait revealed"><span class="label">Пол</span><span class="value${valueClass(sex)}">${escapeHtml(sex)}</span></div>
         </div>
         ${statusHint}
-        ${actionBlock}
-        ${conditionBlock}
-        ${bonus}
-        ${abilityBlock}
-        <div class="traits-grid">${traits}</div>
+        ${myTurn ? traitsBlock + secretBlocks : secretBlocks + traitsBlock}
         ${isHost ? `<p class="host-note">👑 Вы хост: только вы можете начинать раунды, продолжать после голосований и перезапускать игру. Держите вкладку открытой.</p>` : ''}
     </div>`;
 }
@@ -546,6 +850,135 @@ function deciderPanel(app) {
 }
 
 // ---------------------------------------------------------------------------
+//  Игроки (вкладка)
+// ---------------------------------------------------------------------------
+
+function renderPlayersContent(app) {
+    const state = app.state;
+    if (!state) return;
+
+    const html = toArray(state.players).map(player => {
+        const values = player.values || {};
+        const lines = FIELDS
+            .filter(field => Object.prototype.hasOwnProperty.call(values, field.key))
+            .map(field => `<div>• ${escapeHtml(field.label)}: <b>${escapeHtml(displayValue(field, values))}</b></div>`);
+
+        if (player.uid === app.uid && app.hand && app.hand.player) {
+            const bonus = toArray(app.hand.player.bonusLuggage);
+            if (bonus.length) {
+                lines.push(`<div>🎒 Бонусный багаж: <b>${bonus.map(escapeHtml).join(', ')}</b></div>`);
+            }
+        }
+
+        const online = isOnline(app.presence && app.presence[player.uid]) || player.uid === app.uid;
+        const mine = player.uid === app.uid;
+        const badges = [];
+        if (player.isHost) badges.push('<span class="badge host">хост</span>');
+        if (mine) badges.push('<span class="badge me">вы</span>');
+        if (!player.alive) badges.push('<span class="badge dead-badge">выбыл(а)</span>');
+
+        return `<div class="player-card ${mine ? 'me' : ''} ${player.alive ? '' : 'dead'}">
+            <div class="player-card-head">
+                ${avatarHtml(player.name)}
+                <span class="player-card-name">${escapeHtml(player.name)}</span>
+                <span class="player-card-badges">
+                    ${badges.join('')}
+                    <span class="online-dot ${online ? 'on' : 'off'}" title="${online ? 'в сети' : 'офлайн'}"></span>
+                </span>
+            </div>
+            <div class="player-card-traits">
+                ${lines.join('') || '<span class="player-card-empty">Пока ничего не раскрыто.</span>'}
+            </div>
+        </div>`;
+    }).join('');
+
+    setPaneHtml($('playersModalContent'), html || '<i>Игроков нет.</i>');
+}
+
+// ---------------------------------------------------------------------------
+//  Журнал и бункер
+// ---------------------------------------------------------------------------
+
+function renderLog(app) {
+    const state = app.state;
+    const log = state ? toArray(state.log) : [];
+    const box = $('gameLog');
+    if (!box) return;
+
+    const html = log.map(entry =>
+        `<div class="log-entry log-${escapeHtml(entry.type || 'info')}">${escapeHtml(entry.text || '')}</div>`
+    ).join('') || '<i>Журнал пуст.</i>';
+
+    const nearBottom = box.scrollHeight - box.scrollTop - box.clientHeight < 48;
+    const firstRender = !htmlCache.has(box);
+    if (htmlCache.get(box) !== html) {
+        box.innerHTML = html;
+        htmlCache.set(box, html);
+    }
+
+    const maxId = log.reduce((max, entry) => Math.max(max, Number(entry.id) || 0), 0);
+    if (lastLogSeenId == null) lastLogSeenId = maxId;
+
+    if (currentTab === 'log') {
+        lastLogSeenId = maxId;
+        if (nearBottom || firstRender) box.scrollTop = box.scrollHeight;
+        if ($('logTabDot')) $('logTabDot').hidden = true;
+    } else if (maxId > lastLogSeenId) {
+        if ($('logTabDot')) $('logTabDot').hidden = false;
+    }
+}
+
+function renderStoryContent(app) {
+    const state = app.state;
+    const scenario = state && state.scenario;
+    if (!scenario) return;
+
+    $('storyTitle').textContent = scenario.title;
+    setPaneHtml($('storyDesc'),
+        `<p><b>Апокалипсис:</b> ${escapeHtml(scenario.apocalypse)}</p>` +
+        `<p><b>Бункер:</b> ${escapeHtml(scenario.bunkerDesc)}</p>` +
+        `<p class="hint">Параметры не меняются до финала. Итог зависит от прошедших игроков и открытых комнат.</p>`);
+
+    const rooms = toArray(state.rooms);
+    const cards = rooms.map(room => {
+        const status = room.status || 'open';
+        const labels = { open: 'открыта', locked: 'заперта', broken: 'неисправна', closed: 'закрыта' };
+        const inventory = toArray(room.inventory)
+            .map(item => `• ${escapeHtml(item.name)} — ${escapeHtml(item.desc)}`)
+            .join('<br>');
+
+        let note = '';
+        if (status === 'open') {
+            note = '<div class="room-note ok">Доступна. Содержимое учитывается в финале.</div>';
+        } else if (!room.hasOpenerEver) {
+            note = '<div class="room-warning">⚠️ В игре нет игрока, способного открыть эту комнату — ни по профессии, ни по навыку, ни по факту.</div>';
+        } else if (!room.hasOpenerAlive) {
+            note = '<div class="room-warning">⚠️ Подходящий игрок был, но его изгнали — комната не откроется.</div>';
+        } else if (state.phase === 'ended') {
+            note = room.openAtEnd
+                ? '<div class="room-note ok">Открыта: подходящий игрок прошёл в бункер.</div>'
+                : '<div class="room-note bad">Закрыта: подходящий игрок не прошёл в бункер.</div>';
+        } else {
+            note = '<div class="room-note">В игре есть игрок, способный открыть комнату по профессии, навыку или факту. Она откроется в финале, если он пройдёт в бункер.</div>';
+        }
+
+        return `<div class="room-card ${escapeHtml(status)}">
+            <div class="room-head"><b>${escapeHtml(room.name)}</b><span class="room-status">${labels[status] || ''}</span></div>
+            <div class="room-desc">${escapeHtml(room.desc)}</div>
+            <div class="room-loot"><b>Содержимое:</b><br>${inventory || 'ничего полезного'}</div>
+            ${room.locked || room.broken ? `<div class="room-lock">🔒 ${escapeHtml(room.unlockText)}</div>` : ''}
+            ${note}
+        </div>`;
+    }).join('');
+
+    setPaneHtml($('storyRooms'),
+        `<div class="rooms-grid">${cards}</div>` +
+        (Number(state.hiddenRoomCount) > 0
+            ? `<p class="room-hint">🚪 За закрытыми дверями осталось неизвестных помещений: <b>${state.hiddenRoomCount}</b>.</p>`
+            : `<p class="room-hint">Все помещения бункера известны.</p>`));
+}
+
+// ---------------------------------------------------------------------------
 //  Финал
 // ---------------------------------------------------------------------------
 
@@ -673,103 +1106,6 @@ function endingPanel(app) {
                 : `<p class="waiting-note">Хост может перезапустить игру для этой же комнаты.</p>`}
         </div>
     </div>`;
-}
-
-// ---------------------------------------------------------------------------
-//  Модалки
-// ---------------------------------------------------------------------------
-
-export function renderPlayersModal(app) {
-    const state = app.state;
-    if (!state) return;
-    const html = toArray(state.players).map(player => {
-        const values = player.values || {};
-        const lines = FIELDS
-            .filter(field => Object.prototype.hasOwnProperty.call(values, field.key))
-            .map(field => `• ${escapeHtml(field.label)}: <b>${escapeHtml(displayValue(field, values))}</b>`);
-
-        if (player.uid === app.uid && app.hand && app.hand.player) {
-            const bonus = toArray(app.hand.player.bonusLuggage);
-            if (bonus.length) {
-                lines.push(`🎒 Бонусный багаж: <b>${bonus.map(escapeHtml).join(', ')}</b>`);
-            }
-        }
-
-        const online = isOnline(app.presence && app.presence[player.uid]) || player.uid === app.uid;
-        return `<div class="revealed-item">
-            <b class="player-tag">${escapeHtml(player.name)}</b>
-            ${player.isHost ? '<span class="badge host">хост</span>' : ''}
-            ${player.uid === app.uid ? '<span class="badge me">вы</span>' : ''}
-            ${player.alive ? '' : '<span class="badge dead-badge">выбыл(а)</span>'}
-            <span class="online-dot ${online ? 'on' : 'off'}"></span>
-            <br>${lines.join('<br>') || '<i>Пока ничего не раскрыто.</i>'}
-        </div>`;
-    }).join('');
-
-    $('playersModalContent').innerHTML = html || '<i>Игроков нет.</i>';
-}
-
-export function renderLog(app) {
-    const state = app.state;
-    const log = state ? toArray(state.log) : [];
-    const box = $('gameLog');
-    box.innerHTML = log.map(entry =>
-        `<div class="log-entry log-${escapeHtml(entry.type || 'info')}">${escapeHtml(entry.text || '')}</div>`
-    ).join('') || '<i>Журнал пуст.</i>';
-    if (log.length) box.scrollTop = box.scrollHeight;
-}
-
-export function renderStoryModal(app) {
-    const state = app.state;
-    const scenario = state && state.scenario;
-    if (!scenario) return;
-
-    $('storyTitle').textContent = scenario.title;
-    $('storyDesc').innerHTML =
-        `<b>Апокалипсис:</b> ${escapeHtml(scenario.apocalypse)}<br><br>` +
-        `<b>Бункер:</b> ${escapeHtml(scenario.bunkerDesc)}` +
-        `<br><span class="story-meta">${escapeHtml(scenario.bunkerSize)}</span>` +
-        (scenario.plannedStay ? `<br><span class="planned-stay">🕰️ Планируемое время в бункере: <b>${escapeHtml(scenario.plannedStay)}</b></span>` : '') +
-        `<br><br><b>Стартовые параметры:</b><div class="resources-bar">${resourceChips(state.baseResources, state.baseStability)}</div>` +
-        `<p class="hint">Параметры не меняются до финала. Итог зависит от прошедших игроков и открытых комнат.</p>`;
-
-    const rooms = toArray(state.rooms);
-    const cards = rooms.map(room => {
-        const status = room.status || 'open';
-        const labels = { open: 'открыта', locked: 'заперта', broken: 'неисправна', closed: 'закрыта' };
-        const inventory = toArray(room.inventory)
-            .map(item => `• ${escapeHtml(item.name)} — ${escapeHtml(item.desc)}`)
-            .join('<br>');
-
-        let note = '';
-        if (status === 'open') {
-            note = '<div class="room-note ok">Доступна. Содержимое учитывается в финале.</div>';
-        } else if (!room.hasOpenerEver) {
-            note = '<div class="room-warning">⚠️ В игре нет игрока, способного открыть эту комнату — ни по профессии, ни по навыку, ни по факту.</div>';
-        } else if (!room.hasOpenerAlive) {
-            note = '<div class="room-warning">⚠️ Подходящий игрок был, но его изгнали — комната не откроется.</div>';
-        } else if (state.phase === 'ended') {
-            note = room.openAtEnd
-                ? '<div class="room-note ok">Открыта: подходящий игрок прошёл в бункер.</div>'
-                : '<div class="room-note bad">Закрыта: подходящий игрок не прошёл в бункер.</div>';
-        } else {
-            note = '<div class="room-note">В игре есть игрок, способный открыть комнату по профессии, навыку или факту. Она откроется в финале, если он пройдёт в бункер.</div>';
-        }
-
-        return `<div class="room-card ${escapeHtml(status)}">
-            <div class="room-head"><b>${escapeHtml(room.name)}</b><span class="room-status">${labels[status] || ''}</span></div>
-            <div class="room-desc">${escapeHtml(room.desc)}</div>
-            <div class="room-loot"><b>Содержимое:</b><br>${inventory || 'ничего полезного'}</div>
-            ${room.locked || room.broken ? `<div class="room-lock">🔒 ${escapeHtml(room.unlockText)}</div>` : ''}
-            ${note}
-        </div>`;
-    }).join('');
-
-    $('storyRooms').innerHTML =
-        `<div class="rooms-grid">${cards}</div>` +
-        (Number(state.hiddenRoomCount) > 0
-            ? `<p class="room-hint">🚪 За закрытыми дверями осталось неизвестных помещений: <b>${state.hiddenRoomCount}</b>.</p>`
-            : `<p class="room-hint">Все помещения бункера известны.</p>`);
 }
 
 // ---------------------------------------------------------------------------
