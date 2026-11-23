@@ -7,7 +7,7 @@
 //  При изменении файлов игры поднимайте VERSION.
 // ============================================================================
 
-const VERSION = 'shelter-v1';
+const VERSION = 'shelter-v2';
 const CACHE_NAME = `shelter-shell-${VERSION}`;
 
 const PRECACHE = [
